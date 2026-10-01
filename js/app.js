@@ -553,6 +553,25 @@
     }).join('');
   }
 
+  // Helper: ensure only one Daily Budgets element exists on the page (remove duplicates)
+  function normalizeDailyBudgets() {
+    const elems = [];
+    const byId = document.querySelectorAll('#dailyBudgets');
+    byId.forEach(e => elems.push(e));
+    document.querySelectorAll('.panel').forEach(p => {
+      const h4 = p.querySelector('h4, h3, h2');
+      if (h4 && h4.textContent && h4.textContent.trim().toLowerCase().includes('daily budgets')) {
+        if (!elems.includes(p)) elems.push(p);
+      }
+    });
+    if (elems.length <= 1) return;
+    const keeper = elems[0];
+    for (let i = 1; i < elems.length; i++) {
+      const el = elems[i];
+      if (el && el.parentElement) el.parentElement.removeChild(el);
+    }
+  }
+
   // --- Dashboard stats (new) ---
   function renderDashboardStats() {
     const monthKey = currentMonth();
@@ -772,6 +791,9 @@
       const strong = el.querySelector('strong');
       if (strong) strong.textContent = money(val); else el.textContent = money(val);
     });
+
+    // Normalize daily budgets elements to ensure only a single Daily Budgets panel exists
+    normalizeDailyBudgets();
 
     // Also render daily budgets panel if any budgets exist
     const dailyBudgetsHost = $('dailyBudgets');
