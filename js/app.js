@@ -15,18 +15,8 @@
   }
 
   function defaultCategories() {
-    return [
-      { name: 'Food & Drinks', type: 'expense' },
-      { name: 'Transportation', type: 'expense' },
-      { name: 'Family', type: 'expense' },
-      { name: 'Housing', type: 'expense' },
-      { name: 'Utilities', type: 'expense' },
-      { name: 'Shopping', type: 'expense' },
-      { name: 'Health', type: 'expense' },
-      { name: 'Education', type: 'expense' },
-      { name: 'Salary', type: 'income' },
-      { name: 'Loan', type: 'income' }
-    ];
+    // Removed all default categories so the app starts clean.
+    return [];
   }
 
   function fallback() {
@@ -87,6 +77,11 @@
     const holder = $('categoriesList');
     if (!holder) return;
     const cats = (state.categories || []);
+    // Make the container scrollable so many categories don't expand the page
+    holder.style.maxHeight = '320px';
+    holder.style.overflowY = 'auto';
+    holder.style.overflowX = 'hidden';
+
     if (!cats.length) {
       holder.innerHTML = `<div class="muted">No categories</div>`;
       fillCategorySelects();
@@ -108,9 +103,10 @@
       const newName = prompt('Edit category name', c.name);
       if (!newName) return;
       const newType = prompt('Type (expense|income|loan|credit)', c.type) || c.type;
-      // avoid duplicates (case-insensitive)
-      const dup = state.categories.some((x,i) => i!==idx && x.name.toLowerCase() === newName.trim().toLowerCase() && x.type === newType);
-      if (dup) { toast('Category already exists'); return; }
+      // avoid duplicates (case-insensitive) across all types
+      const normalized = newName.trim().toLowerCase();
+      const dup = state.categories.some((x,i) => i!==idx && x.name.trim().toLowerCase() === normalized);
+      if (dup) { toast('Category with this name already exists'); return; }
       state.categories[idx].name = newName.trim();
       state.categories[idx].type = newType;
       saveState();
@@ -139,8 +135,9 @@
     const name = ($('newCategoryName')?.value || '').trim();
     const type = ($('newCategoryType')?.value || 'expense');
     if (!name) { toast('Category name required'); return; }
-    // check duplicate
-    if (state.categories.some(c => c.name.toLowerCase() === name.toLowerCase() && c.type === type)) { toast('Category exists'); return; }
+    // check duplicate by name only (case-insensitive) to avoid unlimited similar categories
+    const normalized = name.trim().toLowerCase();
+    if (state.categories.some(c => c.name.trim().toLowerCase() === normalized)) { toast('Category exists'); return; }
     state.categories.push({ name, type, createdAt: new Date().toISOString() });
     saveState();
     scheduleSync();
@@ -165,14 +162,23 @@
   // fill any category select inputs (category select in add form and budget category select)
   function fillCategorySelects() {
     const categorySelect = $('category');
+    // Show all created categories (not filtered by transaction type)
     if (categorySelect) {
-      const list = (state.categories || []).filter(c => c.type === state.currentType);
+      const list = (state.categories || []);
       categorySelect.innerHTML = list.map(c => `<option>${esc(c.name)}</option>`).join('') || `<option>General</option>`;
+      // limit visual growth of select's parent if necessary (panel styling handled in CSS/JS)
+      categorySelect.style.maxHeight = '220px';
     }
     const budgetCategorySelect = $('budgetCategorySelect');
     if (budgetCategorySelect) {
-      // show expense categories by default, but include all types
-      budgetCategorySelect.innerHTML = (state.categories || []).map(c => `<option value="${esc(c.name)}">${esc(c.name)} • ${esc(c.type)}</option>`).join('');
+      // show unique category names, include type in label for clarity
+      const entries = state.categories || [];
+      // dedupe by name while preserving type (last wins)
+      const seen = new Map();
+      entries.forEach(c => { seen.set(c.name, c); });
+      const unique = Array.from(seen.values());
+      budgetCategorySelect.innerHTML = unique.map(c => `<option value="${esc(c.name)}">${esc(c.name)} • ${esc(c.type)}</option>`).join('') || `<option value="General">General • expense</option>`;
+      budgetCategorySelect.style.maxHeight = '220px';
     }
   }
 
@@ -180,6 +186,11 @@
   function renderBudgetsList() {
     const holder = $('budgetsList');
     if (!holder) return;
+    // Make the container scrollable so many budgets don't expand the page
+    holder.style.maxHeight = '320px';
+    holder.style.overflowY = 'auto';
+    holder.style.overflowX = 'hidden';
+
     const bs = state.budgets || [];
     if (!bs.length) { holder.innerHTML = `<div class="muted">No budgets set</div>`; return; }
     holder.innerHTML = bs.map((b, idx) => {
@@ -275,7 +286,8 @@
   function populateCategories() {
     const s = $('category');
     if (!s) return;
-    const list = (state.categories || []).filter(c => c.type === state.currentType);
+    // Show all categories (not filtered by currentType) so user sees everything
+    const list = (state.categories || []);
     s.innerHTML = list.map(c => `<option>${esc(c.name)}</option>`).join('') || `<option>General</option>`;
   }
 
