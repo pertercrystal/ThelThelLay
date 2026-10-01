@@ -28,7 +28,8 @@
       loans: [],
       settings: { theme: 'light', syncUrl: '', carryOverEnabled: true, carryOverConfirm: false, txPageSize: 50 },
       reportMonth: today.slice(0,7),
-      currentType: 'expense'
+      currentType: 'expense',
+      syncStatus: null
     };
   }
 
@@ -761,132 +762,8 @@
     ctx.restore();
   }
 
-  // --- Transactions rendering with pagination / lazy loading ---
-  function renderHeaderStats() {
-    const monthKey = currentMonth();
-    const xs = (state.transactions || []).filter(t => String(t.date || '').slice(0,7) === monthKey);
-    const t = totals(xs);
-    const remainingMoney = (t.income || 0) - (t.expense || 0) - (t.loan || 0) - (t.credit || 0);
-
-    // compute days in month and days left relative to reportMonth
-    const [ry, rm] = (monthKey || today.slice(0,7)).split('-').map(Number);
-    const daysInMonth = new Date(ry, rm, 0).getDate(); // month end day
-    let daysLeft;
-    const realYear = new Date().getFullYear();
-    const realMonth = new Date().getMonth() + 1;
-    if (ry === realYear && rm === realMonth) {
-      // current real month -> days left from today
-      const now = new Date();
-      daysLeft = Math.max(1, daysInMonth - now.getDate() + 1);
-    } else {
-      // for other months use full month days (future/past)
-      daysLeft = daysInMonth;
-    }
-
-    const daily = Math.max(0, Math.floor(remainingMoney / daysLeft));
-    const map = [['income', t.income], ['expense', t.expense], ['loan', t.loan], ['daily', daily], ['remaining', remainingMoney]];
-    map.forEach(([id,val]) => {
-      const el = $(id);
-      if (!el) return;
-      const strong = el.querySelector('strong');
-      if (strong) strong.textContent = money(val); else el.textContent = money(val);
-    });
-
-    // Normalize daily budgets elements to ensure only a single Daily Budgets panel exists
-    normalizeDailyBudgets();
-
-    // Also render daily budgets panel if any budgets exist
-    const dailyBudgetsHost = $('dailyBudgets');
-    if (dailyBudgetsHost) {
-      const bs = state.budgets || [];
-      if (!bs.length) {
-        dailyBudgetsHost.innerHTML = `<h4>Daily Budgets</h4><div class="muted">No budgets set</div>`;
-      } else {
-        // Show budget per day for each budget (monthly budget / daysInMonth)
-        const rows = bs.map(b => {
-          const perDay = Math.floor((Number(b.amount) || 0) / daysInMonth);
-          return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed var(--line)">
-            <div><strong>${esc(b.category)}</strong><small class="muted">Monthly ${money(b.amount)}</small></div>
-            <div style="text-align:right"><small class="muted">Per day</small><div><b>${money(perDay)}</b></div></div>
-          </div>`;
-        }).join('');
-        dailyBudgetsHost.innerHTML = `<h4>Daily Budgets</h4>` + rows;
-      }
-    }
-  }
-
-  function renderTransactions() {
-    // reversed list so newest appear first
-    const xs = getAllTxSortedDesc();
-    const recentDiv = $('recent');
-    const recentTbody = $('recentRows');
-    const txTbody = $('txRows');
-
-    // Remove/hide recent list on Home page per request
-    if (recentDiv) recentDiv.style.display = 'none';
-    if (recentTbody) {
-      const recentTable = recentTbody.closest('.panel') || recentTbody.parentElement;
-      if (recentTable) recentTable.style.display = 'none';
-    }
-
-    // Ensure panels are scrollable (keeps the app usable when transactions grow large)
-    if (txTbody) {
-      const txPanel = txTbody.closest('.panel') || txTbody.parentElement;
-      if (txPanel) {
-        txPanel.style.maxHeight = '480px';
-        txPanel.style.overflowY = 'auto';
-      }
-    }
-
-    // Render header "Activity (count)" and transactions counter
-    if ($('txCount')) $('txCount').textContent = `Activity (${(state.transactions||[]).length})`;
-    if ($('txCountList')) $('txCountList').textContent = `Transactions (${(state.transactions||[]).length})`;
-
-    if (!xs.length) {
-      if (txTbody) txTbody.innerHTML = `<tr><td colspan="4" class="muted">No transactions</td></tr>`;
-      const txPanel = txTbody ? (txTbody.closest('.panel') || txTbody.parentElement) : null;
-      if (txPanel) {
-        const pag = txPanel.querySelector('#txPagination');
-        if (pag) pag.remove();
-      }
-      return;
-    }
-
-    // Pagination calculations
-    const pageSize = Number(window.__moneyflow_tx_page_size || TX_PAGE_SIZE) || TX_PAGE_SIZE;
-    txTotalPages = Math.max(1, Math.ceil(xs.length / pageSize));
-    if (txCurrentPage > txTotalPages) txCurrentPage = txTotalPages;
-
-    const start = (txCurrentPage - 1) * pageSize;
-    const end = start + pageSize;
-    const pageItems = xs.slice(start, end);
-
-    // Ensure pagination controls exist and wire them
-    ensureTxPaginationControls();
-    const pageInfo = document.getElementById('txPageInfo');
-    if (pageInfo) pageInfo.textContent = `Page ${txCurrentPage} / ${txTotalPages}`;
-
-    // Render page rows efficiently
-    if (txTbody) {
-      txTbody.innerHTML = '';
-      const frag = document.createDocumentFragment();
-      pageItems.forEach(tx => {
-        const tr = document.createElement('tr');
-        const right = tx.type === 'income' ? `<b style="color:green">${money(tx.amount)}</b>` : `<b>${money(tx.amount)}</b>`;
-        tr.innerHTML = `<td>${esc(tx.date || '')}</td>
-          <td><div style="font-weight:700">${esc(tx.category || tx.note || tx.type)}</div><small class="muted">${esc(tx.note || '')} ${tx.loanId ? ' • ' + esc(tx.loanId) : ''}</small></td>
-          <td>${right}</td>
-          <td><button data-remove="${esc(tx.id)}" aria-label="Delete transaction" class="small delete">Delete</button></td>`;
-        frag.appendChild(tr);
-      });
-      txTbody.appendChild(frag);
-    }
-
-    // Attach infinite-scroll once
-    attachTxInfiniteScroll();
-  }
-
-  // Replace existing api() with a hardened, form-encoded POST to avoid CORS preflight and produce clearer errors.
+  // --- Sync status helpers & API wrapper (client) ---
+  // The api() function talks to your Apps Script endpoint (application/x-www-form-urlencoded).
   async function api(action, payload = {}) {
     if (!state.settings || !state.settings.syncUrl) throw new Error('Add the Apps Script URL first.');
 
@@ -925,7 +802,6 @@
       throw new Error('Sync failed: ' + bodyMsg);
     }
 
-    // If parsed JSON available return it, otherwise attempt to return text wrapped
     if (parsed) return parsed;
     try {
       return { ok: true, data: text ? safeParse(text, {}) : {} };
@@ -934,10 +810,147 @@
     }
   }
 
+  // set sync status in state and persist
+  function setSyncStatus({ ok = false, message = '', at = Date.now(), synced = null, localCounts = null, serverCounts = null } = {}) {
+    state.syncStatus = { ok: !!ok, message: String(message || ''), at: at ? Number(at) : Date.now(), synced: synced === null ? null : !!synced, localCounts: localCounts || null, serverCounts: serverCounts || null };
+    saveState();
+    updateSyncStatusUI();
+  }
+
+  function formatTime(ts) {
+    if (!ts) return '—';
+    try {
+      const d = new Date(Number(ts));
+      return d.toLocaleString();
+    } catch (e) { return String(ts); }
+  }
+
+  function updateSyncStatusUI() {
+    // ensure status panel created
+    ensureSyncStatusPanel();
+    const holder = $('syncStatusPanel');
+    if (!holder) return;
+    const s = state.syncStatus;
+    const timeEl = holder.querySelector('#syncLastAt');
+    const statusEl = holder.querySelector('#syncStatusText');
+    const syncedEl = holder.querySelector('#syncSyncedText');
+    const msgEl = holder.querySelector('#syncMessage');
+    const countsEl = holder.querySelector('#syncCounts');
+
+    if (timeEl) timeEl.textContent = s && s.at ? formatTime(s.at) : 'Never';
+    if (statusEl) {
+      if (!s) statusEl.textContent = 'Idle';
+      else statusEl.textContent = s.ok ? 'Success' : 'Failed';
+      statusEl.style.color = s ? (s.ok ? 'var(--success, green)' : 'var(--danger, #c00)') : '';
+    }
+    if (syncedEl) {
+      if (!s || s.synced === null) syncedEl.textContent = 'Unknown';
+      else syncedEl.textContent = s.synced ? 'Yes' : 'No';
+    }
+    if (msgEl) msgEl.textContent = s && s.message ? s.message : '';
+    if (countsEl) {
+      if (s && (s.localCounts || s.serverCounts)) {
+        const local = s.localCounts || {};
+        const server = s.serverCounts || {};
+        countsEl.innerHTML = `<div class="small-muted">Local: tx=${local.transactions||0} cats=${local.categories||0} buds=${local.budgets||0} goals=${local.goals||0} loans=${local.loans||0}</div>
+          <div class="small-muted">Server: tx=${server.transactions||0} cats=${server.categories||0} buds=${server.budgets||0} goals=${server.goals||0} loans=${server.loans||0}</div>`;
+      } else countsEl.innerHTML = '';
+    }
+  }
+
+  // ensure a status panel is present in Settings (injected)
+  function ensureSyncStatusPanel() {
+    const settings = $('settings');
+    if (!settings) return;
+    if (settings.querySelector('#syncStatusPanel')) return;
+
+    const holder = document.createElement('div');
+    holder.id = 'syncStatusPanel';
+    holder.className = 'panel';
+    holder.style.marginTop = '12px';
+    holder.innerHTML = `
+      <h3>Sync status</h3>
+      <div style="display:flex;gap:12px;align-items:center;">
+        <div><small class="muted">Last sync</small><div id="syncLastAt">Never</div></div>
+        <div><small class="muted">Status</small><div id="syncStatusText">Idle</div></div>
+        <div><small class="muted">On sheet</small><div id="syncSyncedText">Unknown</div></div>
+      </div>
+      <div style="margin-top:8px">
+        <div id="syncMessage" class="muted small"></div>
+        <div id="syncCounts" style="margin-top:6px"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button id="syncNow" class="primary">Sync now</button>
+        <button id="syncRefresh" class="">Refresh status</button>
+      </div>
+    `;
+    // insert after carryOver settings if present, otherwise append
+    const carry = settings.querySelector('#carryOverSettings');
+    if (carry && carry.parentElement) carry.parentElement.insertBefore(holder, carry.nextSibling);
+    else settings.appendChild(holder);
+
+    // wire buttons
+    holder.querySelector('#syncNow')?.addEventListener('click', async () => {
+      // run immediate sync
+      try {
+        setSyncStatus({ ok: null, message: 'Syncing...', at: Date.now(), synced: null });
+        await queueSync();
+      } catch (e) {
+        // queueSync already sets status on failure
+      }
+    });
+    holder.querySelector('#syncRefresh')?.addEventListener('click', async () => {
+      // attempt to fetch server data and compare counts
+      try {
+        const url = state.settings?.syncUrl;
+        if (!url) { toast('Enter Apps Script URL first'); return; }
+        const ping = await api('ping', {});
+        // If ping ok, call getAll to compare counts
+        try {
+          const res = await api('getAll', {});
+          if (res && res.data) {
+            const server = {
+              transactions: (res.data.transactions || []).length,
+              categories: (res.data.categories || []).length,
+              budgets: (res.data.budgets || []).length,
+              goals: (res.data.goals || []).length,
+              loans: (res.data.loans || []).length
+            };
+            const local = {
+              transactions: (state.transactions || []).length,
+              categories: (state.categories || []).length,
+              budgets: (state.budgets || []).length,
+              goals: (state.goals || []).length,
+              loans: (state.loans || []).length
+            };
+            const synced = server.transactions === local.transactions && server.categories === local.categories && server.budgets === local.budgets && server.goals === local.goals && server.loans === local.loans;
+            setSyncStatus({ ok: true, message: 'Refreshed', at: Date.now(), synced, localCounts: local, serverCounts: server });
+            toast('Status refreshed');
+          } else {
+            setSyncStatus({ ok: true, message: 'No data returned', at: Date.now(), synced: false });
+            toast('No data from sheet');
+          }
+        } catch (e) {
+          setSyncStatus({ ok: false, message: e && e.message ? e.message : String(e), at: Date.now(), synced: false });
+          toast('Refresh failed');
+        }
+      } catch (e) {
+        setSyncStatus({ ok: false, message: e && e.message ? e.message : String(e), at: Date.now(), synced: false });
+        toast('Ping failed');
+      }
+    });
+
+    updateSyncStatusUI();
+  }
+
   // queueSync sends state to server. scheduleSync debounces calls.
   async function queueSync() {
-    if (!state.settings || !state.settings.syncUrl) return;
+    if (!state.settings || !state.settings.syncUrl) {
+      setSyncStatus({ ok: false, message: 'No sync URL', at: Date.now(), synced: false });
+      return;
+    }
     try {
+      // prepare payload and counts
       const payload = {
         transactions: state.transactions || [],
         categories: state.categories || [],
@@ -945,22 +958,58 @@
         goals: state.goals || [],
         loans: state.loans || []
       };
+      const localCounts = {
+        transactions: (payload.transactions || []).length,
+        categories: (payload.categories || []).length,
+        budgets: (payload.budgets || []).length,
+        goals: (payload.goals || []).length,
+        loans: (payload.loans || []).length
+      };
+
+      // indicate scheduled state
+      setSyncStatus({ ok: null, message: 'Syncing...', at: Date.now(), synced: null, localCounts });
+
       const res = await api('replaceAll', payload);
       if (res && res.data) {
         // update client state using authoritative server data (if provided)
+        // compute server counts for verification
+        const serverCounts = {
+          transactions: (res.data.transactions || payload.transactions || []).length,
+          categories: (res.data.categories || payload.categories || []).length,
+          budgets: (res.data.budgets || payload.budgets || []).length,
+          goals: (res.data.goals || payload.goals || []).length,
+          loans: (res.data.loans || payload.loans || []).length
+        };
+
+        // If the server returns authoritative data, replace local state (this keeps client consistent)
         state.transactions = res.data.transactions || state.transactions || [];
         state.loans = res.data.loans || state.loans || [];
         state.categories = res.data.categories || state.categories || [];
         state.budgets = res.data.budgets || state.budgets || [];
         state.goals = res.data.goals || state.goals || [];
+
+        // Persist and render
         saveState();
         renderAll();
+
+        // Determine whether local and server counts match
+        const synced = serverCounts.transactions === localCounts.transactions &&
+                       serverCounts.categories === localCounts.categories &&
+                       serverCounts.budgets === localCounts.budgets &&
+                       serverCounts.goals === localCounts.goals &&
+                       serverCounts.loans === localCounts.loans;
+
+        setSyncStatus({ ok: true, message: 'Sync succeeded', at: Date.now(), synced, localCounts, serverCounts });
+
+        return res;
       }
-      // success toast is handled by caller or testSync; avoid verbose toasts here
+
+      // If no res.data, still mark success but unknown synced state
+      setSyncStatus({ ok: true, message: 'Sync finished (no data returned)', at: Date.now(), synced: null, localCounts });
       return res;
     } catch (e) {
       console.warn('sync failed', e);
-      // bubble error up so callers can show toasts if needed
+      setSyncStatus({ ok: false, message: e && e.message ? e.message : String(e), at: Date.now(), synced: false });
       throw e;
     }
   }
@@ -969,12 +1018,14 @@
   let _syncTimer = null;
   function scheduleSync(delay = 900) {
     if (_syncTimer) clearTimeout(_syncTimer);
+    // indicate scheduled (but only if we don't already have a pending "syncing" status)
+    setSyncStatus({ ok: null, message: 'Scheduled', at: Date.now(), synced: null });
     _syncTimer = setTimeout(async () => {
       _syncTimer = null;
       try {
         await queueSync();
       } catch (e) {
-        // show a lightweight message but don't block app
+        // setSyncStatus already handled in queueSync
         console.warn('Scheduled sync failed:', e);
       }
     }, delay);
@@ -1052,7 +1103,7 @@
     document.querySelectorAll('[data-page]').forEach(b => b.classList.toggle('active', b.dataset.page === id));
     updateNavDisplay(id);
     if (id === 'home') renderAll();
-    if (id === 'settings') { const inp = $('syncUrlInput'); if (inp) inp.value = state.settings?.syncUrl || ''; }
+    if (id === 'settings') { const inp = $('syncUrlInput'); if (inp) inp.value = state.settings?.syncUrl || ''; updateSyncStatusUI(); }
   }
 
   function handleGlobalClicks(e) {
@@ -1177,6 +1228,7 @@
     // ensure dashboard month control exists before rendering statistics
     ensureDashboardMonthControl();
     ensureCarryOverSettingsControl();
+    ensureSyncStatusPanel();
 
     greeting(); populateCategories(); renderHeaderStats(); renderTransactions(); renderLoanSummary(); updateLoanRepaymentField();
     renderCategoriesList(); renderBudgetsList(); fillCategorySelects();
@@ -1189,6 +1241,8 @@
     const dbm = $('#dashboardMonth'); if (dbm) dbm.value = state.reportMonth || today.slice(0,7);
     // carry over ensure when rendering (in case month changed externally)
     carryOverIfMissingForMonth(state.reportMonth);
+    // update sync UI
+    updateSyncStatusUI();
   }
 
   function greeting() {
@@ -1233,6 +1287,7 @@
         }
       } catch (e) {
         console.warn('ping failed', e);
+        setSyncStatus({ ok: false, message: e && e.message ? e.message : String(e), at: Date.now(), synced: false });
         toast('Ping failed: ' + (e && e.message ? e.message : String(e)));
       }
     });
@@ -1247,11 +1302,34 @@
           state.categories = res.data.categories || state.categories || [];
           state.budgets = res.data.budgets || state.budgets || [];
           state.goals = res.data.goals || state.goals || [];
-          saveState(); renderAll(); toast('Pulled from sheet');
+          saveState(); renderAll();
+          // set sync status: pulled from sheet, mark synced true (data now mirrors sheet)
+          const serverCounts = {
+            transactions: (res.data.transactions || []).length,
+            categories: (res.data.categories || []).length,
+            budgets: (res.data.budgets || []).length,
+            goals: (res.data.goals || []).length,
+            loans: (res.data.loans || []).length
+          };
+          const localCounts = {
+            transactions: (state.transactions || []).length,
+            categories: (state.categories || []).length,
+            budgets: (state.budgets || []).length,
+            goals: (state.goals || []).length,
+            loans: (state.loans || []).length
+          };
+          const synced = serverCounts.transactions === localCounts.transactions &&
+                         serverCounts.categories === localCounts.categories &&
+                         serverCounts.budgets === localCounts.budgets &&
+                         serverCounts.goals === localCounts.goals &&
+                         serverCounts.loans === localCounts.loans;
+          setSyncStatus({ ok: true, message: 'Pulled from sheet', at: Date.now(), synced, localCounts, serverCounts });
+          toast('Pulled from sheet');
         } else {
+          setSyncStatus({ ok: true, message: 'No data from sheet', at: Date.now(), synced: false });
           toast('No data from sheet');
         }
-      } catch (e) { console.warn('pull failed', e); toast('Pull failed: ' + (e && e.message ? e.message : String(e))); }
+      } catch (e) { console.warn('pull failed', e); setSyncStatus({ ok: false, message: e && e.message ? e.message : String(e), at: Date.now(), synced: false }); toast('Pull failed: ' + (e && e.message ? e.message : String(e))); }
     });
 
     $('clear')?.addEventListener('click', () => { if (!confirm('Clear all transactions?')) return; state.transactions = []; state.loans = []; saveState(); scheduleSync(); renderAll(); toast('Cleared'); });
