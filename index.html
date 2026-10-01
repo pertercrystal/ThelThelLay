@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#0b1020" />
+  <title>MoneyFlow</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/ui-polish.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <header>
+      <div class="brand" aria-hidden="false">
+        <img id="appIcon" src="icons/icon-192.png" alt="MoneyFlow icon" />
+        <div>
+          <strong>MoneyFlow</strong><br /><small class="muted">Personal finance • BI</small>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px">
+        <div id="greet" class="muted" aria-live="polite">GOOD DAY</div>
+
+        <!-- theme toggles - class based so multiple toggles work -->
+        <button class="theme-toggle" aria-label="Toggle theme">☾</button>
+
+        <nav class="top-nav" aria-label="Primary navigation">
+          <button data-page="home">Home</button>
+          <button data-page="dashboard">Dashboard</button>
+          <button data-add="expense" class="add">＋</button>
+          <button data-page="transactions">History</button>
+          <button data-page="settings">Settings</button>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <!-- HOME -->
+      <section id="home" class="page active" role="region" aria-labelledby="home-heading">
+        <h2 id="home-heading" class="sr-only">Home</h2>
+        <div class="panel">
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+            <div id="income" class="header-stat"><small>Income</small><strong>0 MMK</strong></div>
+            <div id="expense" class="header-stat"><small>Expense</small><strong>0 MMK</strong></div>
+            <div id="loan" class="header-stat"><small>Loan</small><strong>0 MMK</strong></div>
+            <div id="daily" class="header-stat"><small>Daily Budget</small><strong>0 MMK</strong></div>
+            <div id="remaining" class="header-stat"><small>Remaining</small><strong>0 MMK</strong></div>
+          </div>
+
+          <div style="height:12px"></div>
+
+          <div class="quick-actions" role="toolbar" aria-label="Quick actions">
+            <button data-add="income" title="Add Income"><span class="icon">+</span><span class="label">Income</span></button>
+            <button data-add="expense" title="Add Expense"><span class="icon">-</span><span class="label">Expense</span></button>
+            <button data-add="loan" title="Add Loan"><span class="icon">L</span><span class="label">Loan</span></button>
+            <button data-add="credit" title="Repay Loan"><span class="icon">R</span><span class="label">Repay</span></button>
+          </div>
+        </div>
+
+        <div style="height:12px"></div>
+
+        <div class="cols">
+          <div>
+            <div id="transactionsPanel" class="panel" aria-live="polite">
+              <div class="head" style="align-items:center;">
+                <h3 id="txCount">Activity (0)</h3>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <label class="small muted" for="month">Month</label>
+                  <input id="month" type="month" />
+                </div>
+              </div>
+
+              <div style="height:12px"></div>
+
+              <div id="recent" class="muted">Your recent activity will appear here.</div>
+
+              <div style="height:12px"></div>
+
+              <div class="table">
+                <table>
+                  <thead><tr><th>Date</th><th>Category / Note</th><th>Amount</th><th></th></tr></thead>
+                  <tbody id="recentRows"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div style="height:12px"></div>
+
+            <!-- NOTE: Budget summary moved to Dashboard per request; keep placeholder hidden on Home -->
+            <div id="budgetPanel-home-placeholder" class="panel" style="display:none;">
+              <h3>Budgets</h3>
+              <div id="budgetReport" class="muted">No budgets set</div>
+            </div>
+          </div>
+
+          <aside>
+            <!-- Loan Analysis removed from Home and moved to Dashboard -->
+            <div style="height:12px"></div>
+
+            <div id="dailyBudgets" class="panel">
+              <h4>Daily Budgets</h4>
+              <div class="muted">No budgets set</div>
+            </div>
+
+            <div style="height:12px"></div>
+
+            <!-- Goals placeholder on Home (moved to Dashboard) -->
+            <div id="goalsPanel-home-placeholder" class="panel" style="display:none">
+              <h4>Goals</h4>
+              <div id="goalsList" class="muted">No goals yet</div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ADD -->
+      <section id="add" class="page" role="region" aria-labelledby="add-heading">
+        <h2 id="add-heading" class="sr-only">Add transaction</h2>
+        <div class="panel" style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <h3 id="formTitle">Add Transaction</h3>
+            <small class="muted">Use tabs to change type</small>
+          </div>
+          <div>
+            <button data-page="home">Back</button>
+          </div>
+        </div>
+
+        <div class="tabs" role="tablist" aria-label="Transaction types" style="margin-bottom:12px;">
+          <button data-type="expense" class="active" role="tab" aria-selected="true">Expense</button>
+          <button data-type="income" role="tab">Income</button>
+          <button data-type="loan" role="tab">Loan</button>
+          <button data-type="credit" role="tab">Repayment</button>
+        </div>
+
+        <form id="form" class="panel" aria-label="Add transaction form">
+          <div class="field">
+            <label for="amount">Amount</label>
+            <div class="amount">
+              <span>MMK</span>
+              <input id="amount" name="amount" type="number" min="1" required />
+            </div>
+          </div>
+
+          <div class="two">
+            <div class="field">
+              <label for="date">Date</label>
+              <input id="date" name="date" type="date" />
+            </div>
+
+            <div class="field">
+              <label for="category">Category</label>
+              <select id="category" name="category" aria-label="Category"></select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="note">Note</label>
+            <input id="note" name="note" type="text" placeholder="What was this for?" />
+          </div>
+
+          <div id="loanSelectHolder" class="field" style="display:none"></div>
+
+          <div class="field" style="display:flex;gap:8px;">
+            <button type="submit" class="primary">Save</button>
+            <button type="button" id="cancelAdd">Cancel</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- DASHBOARD -->
+      <section id="dashboard" class="page" role="region" aria-labelledby="dashboard-heading">
+        <h2 id="dashboard-heading" class="sr-only">Dashboard</h2>
+        <small class="muted">MONEY INTELLIGENCE</small>
+        <h1>Dashboard</h1>
+
+        <div class="bi" style="margin-top:12px;">
+          <article>Cash flow<b id="cashflow">0 MMK</b></article>
+          <article>Top spending<b id="topSpend">—</b><small id="topAmt">0 MMK</small></article>
+          <article>Largest activity<b id="largest">—</b><small id="largestAmt">0 MMK</small></article>
+          <article>Entries<b id="rhythm">0</b></article>
+        </div>
+
+        <div class="panel" style="margin-top:12px;">
+          <h2>Money flowing trend</h2>
+          <canvas id="chart" aria-hidden="true"></canvas>
+        </div>
+
+        <div style="height:12px"></div>
+
+        <div class="cols">
+          <div>
+            <div id="budgetPanel" class="panel">
+              <h3>Budgets</h3>
+              <div id="budgetReport" class="muted">No budgets set</div>
+            </div>
+          </div>
+
+          <aside>
+            <!-- Loan Analysis moved to Dashboard -->
+            <div id="loanBI" class="panel" aria-live="polite">
+              <h4>Loan Analysis</h4>
+            </div>
+
+            <div style="height:12px"></div>
+
+            <div id="goalsPanel" class="panel">
+              <h4>Goals</h4>
+              <div id="goalsList" class="muted">No goals yet</div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- TRANSACTIONS -->
+      <section id="transactions" class="page" role="region" aria-labelledby="transactions-heading">
+        <h2 id="transactions-heading" class="sr-only">Transactions</h2>
+        <div class="panel head" style="display:flex;justify-content:space-between;align-items:center;">
+          <div><h2 id="txCountList">Transactions</h2></div>
+          <div>
+            <button id="clear">Clear all</button>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top:12px;">
+          <table>
+            <thead><tr><th>Date</th><th>Activity</th><th>Amount</th><th></th></tr></thead>
+            <tbody id="txRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="settings" class="page" role="region" aria-labelledby="settings-heading">
+        <h2 id="settings-heading" class="sr-only">Settings</h2>
+        <div class="panel head" style="display:flex;justify-content:space-between;align-items:center;">
+          <div><h2>Settings</h2></div>
+          <div><button data-page="home">Back</button></div>
+        </div>
+
+        <!-- Theme -->
+        <div class="panel" style="margin-top:12px;">
+          <h3>Theme</h3>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <button class="theme-toggle switch" aria-label="Toggle theme"></button>
+            <small class="muted">Current: <span id="currentTheme">light</span></small>
+          </div>
+        </div>
+
+        <!-- Categories management -->
+        <div class="panel" style="margin-top:12px;">
+          <h3>Categories</h3>
+          <div id="categoriesList" class="muted">Manage categories in-app</div>
+
+          <div style="margin-top:10px" class="two">
+            <input id="newCategoryName" placeholder="Name" />
+            <select id="newCategoryType">
+              <option value="expense">Expense</option>
+              <option value="income">Income</option>
+              <option value="loan">Loan</option>
+              <option value="credit">Repayment</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px;">
+            <button id="addCategory" class="primary">Add category</button>
+            <button id="resetDefaultCategories">Reset defaults</button>
+          </div>
+        </div>
+
+        <!-- Budgets management -->
+        <div class="panel" style="margin-top:12px;">
+          <h3>Budgets</h3>
+
+          <div id="budgetsList" class="muted">Manage monthly budgets</div>
+
+          <div style="margin-top:10px" class="two">
+            <select id="budgetCategorySelect"></select>
+            <input id="newBudgetAmount" placeholder="Amount (MMK)" type="number" min="0" />
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px;">
+            <button id="addBudget" class="primary">Add budget</button>
+            <button id="clearBudgets">Clear budgets</button>
+          </div>
+        </div>
+
+        <!-- Google Sheets sync -->
+        <div class="panel" style="margin-top:12px;">
+          <h3>Google Sheets sync</h3>
+          <input id="syncUrlInput" type="url" placeholder="https://script.google.com/..." />
+          <div class="sync" style="margin-top:8px;">
+            <button id="saveSyncUrl">Save</button>
+            <button id="testSync">Test</button>
+            <button id="pullFromSheets">Pull</button>
+          </div>
+          <small class="muted">URL stored locally in localStorage.</small>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="panel" role="status" aria-live="polite"></div>
+
+    <nav class="bottom-nav" aria-label="Mobile navigation">
+      <button data-page="home">Home</button>
+      <button data-page="dashboard">Dashboard</button>
+      <button data-add="expense" class="add">＋</button>
+      <button data-page="transactions">History</button>
+      <button data-page="settings">Settings</button>
+    </nav>
+
+  </div>
+
+  <script src="js/app.js" defer></script>
+  <script src="js/loan-logic.js" defer></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(()=>{});
+    }
+  </script>
+</body>
+</html>

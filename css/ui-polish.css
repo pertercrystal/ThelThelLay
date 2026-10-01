@@ -1,0 +1,25 @@
+/* css/ui-polish.css - small visual polish */
+.quick-actions button,
+.action-buttons button {
+  border-radius: 18px;
+  padding: 10px 14px;
+  box-shadow: 0 8px 20px rgba(16,24,40,0.04);
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.quick-actions button:hover { transform: translateY(-1px); box-shadow: 0 10px 26px rgba(16,24,40,0.06); }
+.quick-actions .label { font-size: 11px; margin-top: 4px; display:block; text-align:center; }
+.header-stat { text-align:center; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* Small / delete button polish */
+button.small {
+  transition: background .12s ease, color .12s ease, transform .08s ease;
+}
+button.small:active { transform: translateY(1px); }
+button.small.delete { opacity: 0.95; }
+
+/* Make table small buttons consistent with polishes */
+.table button {
+  transition: background .12s ease, transform .08s ease;
+}
+.table button:active { transform: translateY(1px); }
