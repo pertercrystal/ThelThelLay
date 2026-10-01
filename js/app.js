@@ -15,7 +15,7 @@
   }
 
   function defaultCategories() {
-    // Removed all default categories so the app starts clean.
+    // start with no default categories
     return [];
   }
 
@@ -26,7 +26,7 @@
       budgets: [], // {id, category, amount}
       goals: [],
       loans: [],
-      settings: { theme: 'light', syncUrl: '' },
+      settings: { theme: 'light', syncUrl: '', carryOverEnabled: true, carryOverConfirm: false, txPageSize: 50 },
       reportMonth: today.slice(0,7),
       currentType: 'expense'
     };
@@ -71,6 +71,97 @@
   }
 
   function currentMonth() { return state.reportMonth || today.slice(0,7); }
+
+  // -------------------------
+  // Transaction pagination config
+  // -------------------------
+  const TX_PAGE_SIZE = 50; // default page size for history
+  let txCurrentPage = 1;
+  let txTotalPages = 1;
+  let txInfiniteScrollBound = false;
+
+  // initialize page size from settings
+  if (!window.__moneyflow_tx_page_size) window.__moneyflow_tx_page_size = Number(state.settings?.txPageSize) || TX_PAGE_SIZE;
+
+  function getAllTxSortedDesc() {
+    return (state.transactions || []).slice().sort((a,b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return tb - ta;
+    });
+  }
+
+  function ensureTxPaginationControls() {
+    const txPanel = $('txRows') ? $('txRows').closest('.panel') || $('txRows').parentElement : null;
+    if (!txPanel) return;
+    // container for pagination
+    let container = txPanel.querySelector('#txPagination');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'txPagination';
+      // match app style: use small buttons and muted page info
+      container.className = 'head';
+      container.style.display = 'flex';
+      container.style.gap = '8px';
+      container.style.alignItems = 'center';
+      container.style.marginTop = '8px';
+      container.style.justifyContent = 'center';
+      txPanel.appendChild(container);
+    }
+    // render controls using existing "small" button style
+    const pageSize = Number(window.__moneyflow_tx_page_size || TX_PAGE_SIZE) || TX_PAGE_SIZE;
+    container.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px">
+        <button id="txPrev" class="small">Prev</button>
+        <div id="txPageInfo" class="muted">Page 1 / 1</div>
+        <button id="txNext" class="small">Next</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-left:12px">
+        <label class="small muted" for="txPageSize">Rows</label>
+        <select id="txPageSize" style="min-width:64px">
+          <option value="20"${pageSize===20?' selected':''}>20</option>
+          <option value="50"${pageSize===50?' selected':''}>50</option>
+          <option value="100"${pageSize===100?' selected':''}>100</option>
+        </select>
+      </div>
+    `;
+    container.querySelector('#txPrev')?.addEventListener('click', () => {
+      if (txCurrentPage > 1) { txCurrentPage--; renderTransactions(); scrollTxPanelToTop(); }
+    });
+    container.querySelector('#txNext')?.addEventListener('click', () => {
+      if (txCurrentPage < txTotalPages) { txCurrentPage++; renderTransactions(); scrollTxPanelToTop(); }
+    });
+    container.querySelector('#txPageSize')?.addEventListener('change', (e) => {
+      const v = Number(e.target.value) || TX_PAGE_SIZE;
+      txCurrentPage = 1;
+      window.__moneyflow_tx_page_size = v;
+      // persist preference to settings so it survives reloads
+      state.settings = state.settings || {};
+      state.settings.txPageSize = v;
+      saveState();
+      renderTransactions();
+    });
+  }
+
+  function scrollTxPanelToTop() {
+    const txPanel = $('txRows') ? $('txRows').closest('.panel') || $('txRows').parentElement : null;
+    if (txPanel) txPanel.scrollTop = 0;
+  }
+
+  function attachTxInfiniteScroll() {
+    if (txInfiniteScrollBound) return;
+    const txPanel = $('txRows') ? $('txRows').closest('.panel') || $('txRows').parentElement : null;
+    if (!txPanel) return;
+    txPanel.addEventListener('scroll', () => {
+      // if near bottom, load next page
+      const atBottom = txPanel.scrollHeight - txPanel.scrollTop - txPanel.clientHeight < 60;
+      if (atBottom && txCurrentPage < txTotalPages) {
+        txCurrentPage++;
+        renderTransactions();
+      }
+    });
+    txInfiniteScrollBound = true;
+  }
 
   // --- Categories management (UI + logic) ---
   function renderCategoriesList() {
@@ -346,6 +437,56 @@
     }
   }
 
+  // Carry over function: compute remaining from previous month and add a "Carry Over" income tx at first day of current month if not already present.
+  function prevMonthKey(monthKey) {
+    // monthKey: 'YYYY-MM'
+    const [y, m] = monthKey.split('-').map(Number);
+    const date = new Date(Date.UTC(y, m - 1, 1));
+    date.setUTCMonth(date.getUTCMonth() - 1);
+    const py = date.getUTCFullYear();
+    const pm = String(date.getUTCMonth() + 1).padStart(2, '0');
+    return `${py}-${pm}`;
+  }
+
+  function carryOverIfMissingForMonth(monthKey) {
+    if (!monthKey) return;
+    // respect settings toggle
+    if (!state.settings?.carryOverEnabled) return;
+    const prevKey = prevMonthKey(monthKey);
+    const prevTxs = (state.transactions || []).filter(tx => String(tx.date || '').slice(0,7) === prevKey);
+    if (!prevTxs.length) return;
+    const t = totals(prevTxs);
+    const remainingMoney = (t.income || 0) - (t.expense || 0) - (t.loan || 0) - (t.credit || 0);
+    if (!(remainingMoney > 0)) return; // only carry positive remaining
+    // Avoid duplicate carry-over for same month
+    const exists = (state.transactions || []).some(tx => {
+      return String(tx.date || '').slice(0,7) === monthKey && String((tx.category||'').trim().toLowerCase()) === 'carry over';
+    });
+    if (exists) return;
+
+    // confirm if required
+    if (state.settings?.carryOverConfirm) {
+      const ok = confirm(`Previous month (${prevKey}) remaining: ${money(remainingMoney)}. Add "Carry Over" to ${monthKey}?`);
+      if (!ok) return;
+    }
+
+    // create carry-over transaction on first day of month
+    const newTx = {
+      id: uid('tx'),
+      type: 'income',
+      amount: remainingMoney,
+      category: 'Carry Over',
+      note: `Carry over from ${prevKey}`,
+      date: `${monthKey}-01`,
+      createdAt: new Date().toISOString()
+    };
+    state.transactions = state.transactions || [];
+    state.transactions.push(newTx);
+    saveState();
+    scheduleSync();
+    toast(`Carry Over added: ${money(remainingMoney)}`);
+  }
+
   function renderLoanSummary() {
     repairLoanRecords();
     applyRepayments();
@@ -601,14 +742,28 @@
     ctx.restore();
   }
 
-  // --- Transactions rendering ---
+  // --- Transactions rendering with pagination / lazy loading ---
   function renderHeaderStats() {
-    const xs = (state.transactions || []).filter(t => String(t.date || '').slice(0,7) === currentMonth());
+    const monthKey = currentMonth();
+    const xs = (state.transactions || []).filter(t => String(t.date || '').slice(0,7) === monthKey);
     const t = totals(xs);
     const remainingMoney = (t.income || 0) - (t.expense || 0) - (t.loan || 0) - (t.credit || 0);
-    const now = new Date();
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
-    const daysLeft = Math.max(1, daysInMonth - now.getDate() + 1);
+
+    // compute days in month and days left relative to reportMonth
+    const [ry, rm] = (monthKey || today.slice(0,7)).split('-').map(Number);
+    const daysInMonth = new Date(ry, rm, 0).getDate(); // month end day
+    let daysLeft;
+    const realYear = new Date().getFullYear();
+    const realMonth = new Date().getMonth() + 1;
+    if (ry === realYear && rm === realMonth) {
+      // current real month -> days left from today
+      const now = new Date();
+      daysLeft = Math.max(1, daysInMonth - now.getDate() + 1);
+    } else {
+      // for other months use full month days (future/past)
+      daysLeft = daysInMonth;
+    }
+
     const daily = Math.max(0, Math.floor(remainingMoney / daysLeft));
     const map = [['income', t.income], ['expense', t.expense], ['loan', t.loan], ['daily', daily], ['remaining', remainingMoney]];
     map.forEach(([id,val]) => {
@@ -617,55 +772,96 @@
       const strong = el.querySelector('strong');
       if (strong) strong.textContent = money(val); else el.textContent = money(val);
     });
+
+    // Also render daily budgets panel if any budgets exist
+    const dailyBudgetsHost = $('dailyBudgets');
+    if (dailyBudgetsHost) {
+      const bs = state.budgets || [];
+      if (!bs.length) {
+        dailyBudgetsHost.innerHTML = `<h4>Daily Budgets</h4><div class="muted">No budgets set</div>`;
+      } else {
+        // Show budget per day for each budget (monthly budget / daysInMonth)
+        const rows = bs.map(b => {
+          const perDay = Math.floor((Number(b.amount) || 0) / daysInMonth);
+          return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed var(--line)">
+            <div><strong>${esc(b.category)}</strong><small class="muted">Monthly ${money(b.amount)}</small></div>
+            <div style="text-align:right"><small class="muted">Per day</small><div><b>${money(perDay)}</b></div></div>
+          </div>`;
+        }).join('');
+        dailyBudgetsHost.innerHTML = `<h4>Daily Budgets</h4>` + rows;
+      }
+    }
   }
 
   function renderTransactions() {
-    const xs = (state.transactions || []).slice().reverse();
-    const recentDiv = $('recent'); const recentTbody = $('recentRows'); const txTbody = $('txRows');
+    // reversed list so newest appear first
+    const xs = getAllTxSortedDesc();
+    const recentDiv = $('recent');
+    const recentTbody = $('recentRows');
+    const txTbody = $('txRows');
+
+    // Remove/hide recent list on Home page per request
+    if (recentDiv) recentDiv.style.display = 'none';
+    if (recentTbody) {
+      const recentTable = recentTbody.closest('.panel') || recentTbody.parentElement;
+      if (recentTable) recentTable.style.display = 'none';
+    }
+
+    // Ensure panels are scrollable (keeps the app usable when transactions grow large)
+    if (txTbody) {
+      const txPanel = txTbody.closest('.panel') || txTbody.parentElement;
+      if (txPanel) {
+        txPanel.style.maxHeight = '480px';
+        txPanel.style.overflowY = 'auto';
+      }
+    }
+
+    // Render header "Activity (count)" and transactions counter
+    if ($('txCount')) $('txCount').textContent = `Activity (${(state.transactions||[]).length})`;
+    if ($('txCountList')) $('txCountList').textContent = `Transactions (${(state.transactions||[]).length})`;
+
     if (!xs.length) {
-      if (recentDiv) recentDiv.innerHTML = `<div class="muted">No transactions</div>`;
-      if (recentTbody) recentTbody.innerHTML = `<tr><td colspan="4" class="muted">No transactions</td></tr>`;
       if (txTbody) txTbody.innerHTML = `<tr><td colspan="4" class="muted">No transactions</td></tr>`;
+      const txPanel = txTbody ? (txTbody.closest('.panel') || txTbody.parentElement) : null;
+      if (txPanel) {
+        const pag = txPanel.querySelector('#txPagination');
+        if (pag) pag.remove();
+      }
       return;
     }
 
-    if (recentDiv) {
-      recentDiv.innerHTML = xs.slice(0,5).map(tx => {
-        const right = tx.type === 'income' ? `<b style="color:green">${money(tx.amount)}</b>` : `<b>${money(tx.amount)}</b>`;
-        return `<div class="row" style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px;border-radius:10px;border:1px solid var(--line);background:var(--card);margin-bottom:6px">
-                  <div>
-                    <div style="font-weight:700">${esc(tx.category || tx.note || tx.type)}</div>
-                    <small class="muted">${esc(tx.note || '')} ${tx.loanId ? ' • ' + esc(tx.loanId) : ''}</small>
-                  </div>
-                  <div>${right}</div>
-                </div>`;
-      }).join('');
-    }
+    // Pagination calculations
+    const pageSize = Number(window.__moneyflow_tx_page_size || TX_PAGE_SIZE) || TX_PAGE_SIZE;
+    txTotalPages = Math.max(1, Math.ceil(xs.length / pageSize));
+    if (txCurrentPage > txTotalPages) txCurrentPage = txTotalPages;
 
-    if (recentTbody) {
-      recentTbody.innerHTML = xs.slice(0,8).map(tx => {
-        const right = tx.type === 'income' ? `<b style="color:green">${money(tx.amount)}</b>` : `<b>${money(tx.amount)}</b>`;
-        return `<tr>
-          <td>${esc(tx.date || '')}</td>
-          <td><div style="font-weight:700">${esc(tx.category || tx.note || tx.type)}</div><small class="muted">${esc(tx.note || '')} ${tx.loanId ? ' • ' + esc(tx.loanId) : ''}</small></td>
-          <td>${right}</td>
-          <td></td>
-        </tr>`;
-      }).join('');
-    }
+    const start = (txCurrentPage - 1) * pageSize;
+    const end = start + pageSize;
+    const pageItems = xs.slice(start, end);
 
+    // Ensure pagination controls exist and wire them
+    ensureTxPaginationControls();
+    const pageInfo = document.getElementById('txPageInfo');
+    if (pageInfo) pageInfo.textContent = `Page ${txCurrentPage} / ${txTotalPages}`;
+
+    // Render page rows efficiently
     if (txTbody) {
-      txTbody.innerHTML = xs.map(tx => {
+      txTbody.innerHTML = '';
+      const frag = document.createDocumentFragment();
+      pageItems.forEach(tx => {
+        const tr = document.createElement('tr');
         const right = tx.type === 'income' ? `<b style="color:green">${money(tx.amount)}</b>` : `<b>${money(tx.amount)}</b>`;
-        // ADD Delete button in Transactions (History) table only
-        return `<tr>
-          <td>${esc(tx.date || '')}</td>
+        tr.innerHTML = `<td>${esc(tx.date || '')}</td>
           <td><div style="font-weight:700">${esc(tx.category || tx.note || tx.type)}</div><small class="muted">${esc(tx.note || '')} ${tx.loanId ? ' • ' + esc(tx.loanId) : ''}</small></td>
           <td>${right}</td>
-          <td><button data-remove="${tx.id}" aria-label="Delete transaction" class="small delete">Delete</button></td>
-        </tr>`;
-      }).join('');
+          <td><button data-remove="${esc(tx.id)}" aria-label="Delete transaction" class="small delete">Delete</button></td>`;
+        frag.appendChild(tr);
+      });
+      txTbody.appendChild(frag);
     }
+
+    // Attach infinite-scroll once
+    attachTxInfiniteScroll();
   }
 
   // Replace existing api() with a hardened, form-encoded POST to avoid CORS preflight and produce clearer errors.
@@ -793,6 +989,8 @@
       state.transactions.push(tx);
     }
     saveState();
+    // after adding new tx, reset to first page to show newest
+    txCurrentPage = 1;
     updateLoanRepaymentField(); renderAll(); toast('Saved');
     // schedule sync (debounced)
     try { scheduleSync(); } catch (_) {}
@@ -864,7 +1062,100 @@
     saveState();
   }
 
+  // Insert Dashboard month filter control (type=month) into the Dashboard header area
+  function ensureDashboardMonthControl() {
+    const dashboard = $('dashboard');
+    if (!dashboard) return;
+    // try to insert into the .bi area if present, otherwise near the H1
+    const target = dashboard.querySelector('.bi') || dashboard.querySelector('h1');
+    if (!target) return;
+    if (dashboard.querySelector('#dashboardMonthHolder')) return; // already added
+
+    const holder = document.createElement('div');
+    holder.id = 'dashboardMonthHolder';
+    holder.style.display = 'flex';
+    holder.style.gap = '8px';
+    holder.style.alignItems = 'center';
+    holder.style.marginLeft = 'auto';
+    holder.style.marginTop = '6px';
+    // label + input
+    holder.innerHTML = `<label for="dashboardMonth" class="small muted" style="margin-right:6px">Month</label><input id="dashboardMonth" type="month" />`;
+    // append: for responsive layout, append to the dashboard top area
+    target.parentElement.insertBefore(holder, target.nextSibling);
+
+    const inp = holder.querySelector('#dashboardMonth');
+    if (inp) {
+      inp.value = state.reportMonth || today.slice(0,7);
+      inp.addEventListener('change', (e) => {
+        const v = e.target.value;
+        if (!v) return;
+        // update report month and add carry over if needed
+        state.reportMonth = v;
+        saveState();
+        // Add carry-over for this month if required
+        carryOverIfMissingForMonth(v);
+        renderAll();
+      });
+    }
+    // Also set input to current state on render
+    const inp2 = $('#dashboardMonth');
+    if (inp2) inp2.value = state.reportMonth || today.slice(0,7);
+  }
+
+  // Insert Carry Over settings control into Settings panel (injected, no HTML file edit)
+  function ensureCarryOverSettingsControl() {
+    const settings = $('settings');
+    if (!settings) return;
+    if (settings.querySelector('#carryOverSettings')) return;
+
+    const panel = settings.querySelector('.panel') || settings;
+    // create a new block (small, non-invasive)
+    const holder = document.createElement('div');
+    holder.id = 'carryOverSettings';
+    holder.style.marginTop = '12px';
+    holder.className = 'panel';
+    holder.innerHTML = `
+      <h3>Carry Over</h3>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <label class="small muted" for="carryOverEnable">Enable carry over</label>
+        <input id="carryOverEnable" type="checkbox" />
+        <label class="small muted" for="carryOverConfirm" style="margin-left:12px">Ask before adding</label>
+        <input id="carryOverConfirm" type="checkbox" />
+      </div>
+      <small class="muted">When enabled, positive remaining from previous month is added as a "Carry Over" income on the 1st of the report month.</small>
+    `;
+    // place near other settings panels: append after the theme panel (find the Theme panel)
+    const themePanel = Array.from(settings.querySelectorAll('.panel')).find(p => p.textContent && p.textContent.includes('Theme'));
+    if (themePanel && themePanel.parentElement) themePanel.parentElement.insertBefore(holder, themePanel.nextSibling);
+    else settings.appendChild(holder);
+
+    const enable = holder.querySelector('#carryOverEnable');
+    const confirmCb = holder.querySelector('#carryOverConfirm');
+    if (enable) {
+      enable.checked = state.settings?.carryOverEnabled !== false;
+      enable.addEventListener('change', (e) => {
+        state.settings = state.settings || {};
+        state.settings.carryOverEnabled = !!e.target.checked;
+        saveState();
+        toast('Carry Over ' + (e.target.checked ? 'enabled' : 'disabled'));
+      });
+    }
+    if (confirmCb) {
+      confirmCb.checked = !!state.settings?.carryOverConfirm;
+      confirmCb.addEventListener('change', (e) => {
+        state.settings = state.settings || {};
+        state.settings.carryOverConfirm = !!e.target.checked;
+        saveState();
+        toast('Carry Over confirmation ' + (e.target.checked ? 'on' : 'off'));
+      });
+    }
+  }
+
   function renderAll() {
+    // ensure dashboard month control exists before rendering statistics
+    ensureDashboardMonthControl();
+    ensureCarryOverSettingsControl();
+
     greeting(); populateCategories(); renderHeaderStats(); renderTransactions(); renderLoanSummary(); updateLoanRepaymentField();
     renderCategoriesList(); renderBudgetsList(); fillCategorySelects();
     renderBudgetReportSummary(); renderGoalsList(); renderTrendChart();
@@ -872,6 +1163,10 @@
     if ($('month')) $('month').value = currentMonth();
     if ($('txCount')) $('txCount').textContent = `Activity (${(state.transactions||[]).length})`;
     if ($('txCountList')) $('txCountList').textContent = `Transactions (${(state.transactions||[]).length})`;
+    // dashboard month input sync
+    const dbm = $('#dashboardMonth'); if (dbm) dbm.value = state.reportMonth || today.slice(0,7);
+    // carry over ensure when rendering (in case month changed externally)
+    carryOverIfMissingForMonth(state.reportMonth);
   }
 
   function greeting() {
@@ -954,10 +1249,16 @@
     state.budgets = Array.isArray(state.budgets) ? state.budgets : [];
     state.loans = Array.isArray(state.loans) ? state.loans : [];
     state.goals = Array.isArray(state.goals) ? state.goals : [];
+    // ensure settings defaults exist
+    state.settings = Object.assign({}, fallback().settings, state.settings || {});
+    // init page size from settings
+    window.__moneyflow_tx_page_size = Number(state.settings.txPageSize || window.__moneyflow_tx_page_size || TX_PAGE_SIZE);
     repairTransactionIds();
     applyTheme();
     wireEvents();
     wireTabs();
+    // Ensure carry over for current report month is present if needed
+    carryOverIfMissingForMonth(state.reportMonth);
     renderAll();
     showPage('home');
   }
@@ -969,7 +1270,14 @@
     renderAll,
     applyTheme,
     updateLoanRepaymentField,
-    scheduleSync
+    scheduleSync,
+    // expose pagination controls for debugging/testing
+    _tx: {
+      pageSize: () => Number(window.__moneyflow_tx_page_size || TX_PAGE_SIZE),
+      currentPage: () => txCurrentPage,
+      totalPages: () => txTotalPages,
+      goToPage: (p) => { txCurrentPage = p; renderTransactions(); }
+    }
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once:true }); else init();
