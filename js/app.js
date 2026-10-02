@@ -15,7 +15,7 @@
   }
 
   function defaultCategories() {
-    // removed default categories as requested
+    // keep defaults empty per your earlier request
     return [];
   }
 
@@ -23,7 +23,7 @@
     return {
       transactions: [],
       categories: defaultCategories(),
-      budgets: [], // {id, category, amount}
+      budgets: [],
       goals: [],
       loans: [],
       settings: { theme: 'light', syncUrl: '' },
@@ -54,9 +54,7 @@
 
   function uid(prefix='id') { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`; }
 
-  function saveState() {
-    writeState(state);
-  }
+  function saveState() { writeState(state); }
 
   function repairTransactionIds() {
     let changed = false; (state.transactions || []).forEach(tx => {
@@ -64,24 +62,58 @@
       if (!tx.createdAt) { tx.createdAt = Date.now(); changed = true; }
       if (!tx.date) { tx.date = today; changed = true; }
     });
-    if (changed) {
-      saveState();
-      scheduleSync();
-    }
+    if (changed) { saveState(); scheduleSync(); }
   }
 
   function currentMonth() { return state.reportMonth || today.slice(0,7); }
 
-  // --- Categories management (UI + logic) ---
+  // ---------------- Carry over logic ----------------
+  function prevMonthKey(monthKey) {
+    const [y, m] = monthKey.split('-').map(Number);
+    const d = new Date(Date.UTC(y, m - 1, 1));
+    d.setUTCMonth(d.getUTCMonth() - 1);
+    const py = d.getUTCFullYear();
+    const pm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    return `${py}-${pm}`;
+  }
+
+  function carryOverIfMissingForMonth(monthKey) {
+    if (!monthKey) return;
+    // carry-over only if enabled (default behavior: auto add)
+    // We'll add it automatically if there's remaining > 0 from previous month and no existing "Carry Over" tx for that month.
+    const prev = prevMonthKey(monthKey);
+    const prevTxs = (state.transactions || []).filter(tx => String(tx.date || '').slice(0,7) === prev);
+    if (!prevTxs.length) return;
+    const t = totals(prevTxs);
+    const remainingMoney = (t.income || 0) - (t.expense || 0) - (t.loan || 0) - (t.credit || 0);
+    if (!(remainingMoney > 0)) return;
+    const exists = (state.transactions || []).some(tx => String(tx.date || '').slice(0,7) === monthKey && String((tx.category||'').trim().toLowerCase()) === 'carry over');
+    if (exists) return;
+    // Add carry over
+    const newTx = {
+      id: uid('tx'),
+      type: 'income',
+      amount: remainingMoney,
+      category: 'Carry Over',
+      note: `Carry over from ${prev}`,
+      date: `${monthKey}-01`,
+      createdAt: new Date().toISOString()
+    };
+    state.transactions = state.transactions || [];
+    state.transactions.push(newTx);
+    saveState();
+    scheduleSync();
+    toast(`Carry over added: ${money(remainingMoney)}`);
+  }
+
+  // ---------------- Categories ----------------
   function renderCategoriesList() {
     const holder = $('categoriesList');
     if (!holder) return;
     const cats = (state.categories || []);
-    // make list scrollable so unlimited categories don't break layout
     holder.style.maxHeight = '320px';
     holder.style.overflowY = 'auto';
     holder.style.overflowX = 'hidden';
-
     if (!cats.length) {
       holder.innerHTML = `<div class="muted">No categories</div>`;
       fillCategorySelects();
@@ -96,36 +128,24 @@
         </div>
       </div>`;
     }).join('');
-    // wire inline events
-    holder.querySelectorAll('button.edit').forEach(btn => btn.addEventListener('click', e => {
+    holder.querySelectorAll('button.edit').forEach(btn => btn.addEventListener('click', () => {
       const idx = +btn.dataset.idx;
       const c = state.categories[idx];
       const newName = prompt('Edit category name', c.name);
       if (!newName) return;
       const newType = prompt('Type (expense|income|loan|credit)', c.type) || c.type;
-      // avoid duplicates (case-insensitive)
-      const dup = state.categories.some((x,i) => i!==idx && x.name.toLowerCase() === newName.trim().toLowerCase() && x.type === newType);
+      const dup = state.categories.some((x,i) => i!==idx && x.name.trim().toLowerCase() === newName.trim().toLowerCase() && x.type === newType);
       if (dup) { toast('Category already exists'); return; }
       state.categories[idx].name = newName.trim();
       state.categories[idx].type = newType;
-      saveState();
-      renderCategoriesList();
-      populateCategories();
-      fillCategorySelects();
-      scheduleSync();
-      toast('Category updated');
+      saveState(); renderCategoriesList(); populateCategories(); fillCategorySelects(); scheduleSync(); toast('Category updated');
     }));
-    holder.querySelectorAll('button.delete').forEach(btn => btn.addEventListener('click', e => {
+    holder.querySelectorAll('button.delete').forEach(btn => btn.addEventListener('click', () => {
       const idx = +btn.dataset.idx;
       const c = state.categories[idx];
       if (!confirm(`Delete category "${c.name}" (${c.type})? This will not delete existing transactions.`)) return;
       state.categories.splice(idx,1);
-      saveState();
-      renderCategoriesList();
-      populateCategories();
-      fillCategorySelects();
-      scheduleSync();
-      toast('Category deleted');
+      saveState(); renderCategoriesList(); populateCategories(); fillCategorySelects(); scheduleSync(); toast('Category deleted');
     }));
     fillCategorySelects();
   }
@@ -134,53 +154,42 @@
     const name = ($('newCategoryName')?.value || '').trim();
     const type = ($('newCategoryType')?.value || 'expense');
     if (!name) { toast('Category name required'); return; }
-    // check duplicate
-    if (state.categories.some(c => c.name.toLowerCase() === name.toLowerCase() && c.type === type)) { toast('Category exists'); return; }
+    const normalized = name.trim().toLowerCase();
+    if (state.categories.some(c => c.name.trim().toLowerCase() === normalized && c.type === type)) { toast('Category exists'); return; }
     state.categories.push({ name, type, createdAt: new Date().toISOString() });
-    saveState();
-    scheduleSync();
-    $('newCategoryName').value = '';
-    renderCategoriesList();
-    populateCategories();
-    fillCategorySelects();
-    toast('Category added');
+    saveState(); scheduleSync(); $('newCategoryName').value = ''; renderCategoriesList(); populateCategories(); fillCategorySelects(); toast('Category added');
   }
 
   function resetDefaultCategories() {
     if (!confirm('Reset categories to defaults? This will replace your categories list.')) return;
     state.categories = defaultCategories();
-    saveState();
-    scheduleSync();
-    renderCategoriesList();
-    populateCategories();
-    fillCategorySelects();
-    toast('Categories reset to defaults');
+    saveState(); scheduleSync(); renderCategoriesList(); populateCategories(); fillCategorySelects(); toast('Categories reset to defaults');
   }
 
-  // fill any category select inputs (category select in add form and budget category select)
   function fillCategorySelects() {
     const categorySelect = $('category');
     if (categorySelect) {
       const list = (state.categories || []).filter(c => c.type === state.currentType);
       categorySelect.innerHTML = list.map(c => `<option>${esc(c.name)}</option>`).join('') || `<option>General</option>`;
-      // don't change native UI behavior; native select dropdowns are scrollable automatically
     }
     const budgetCategorySelect = $('budgetCategorySelect');
     if (budgetCategorySelect) {
-      // show expense categories by default, but include all types
-      budgetCategorySelect.innerHTML = (state.categories || []).map(c => `<option value="${esc(c.name)}">${esc(c.name)} • ${esc(c.type)}</option>`).join('');
+      const entries = state.categories || [];
+      const seen = new Map();
+      entries.forEach(c => { if (!seen.has(c.name)) seen.set(c.name, c); });
+      const unique = Array.from(seen.values());
+      budgetCategorySelect.innerHTML = unique.map(c => `<option value="${esc(c.name)}">${esc(c.name)} • ${esc(c.type)}</option>`).join('') || `<option value="General">General • expense</option>`;
+      budgetCategorySelect.style.maxHeight = '220px';
     }
   }
 
-  // --- Budgets management ---
+  // ---------------- Budgets ----------------
   function renderBudgetsList() {
     const holder = $('budgetsList');
     if (!holder) return;
-    // make list scrollable so unlimited budgets don't break layout
     holder.style.maxHeight = '320px';
     holder.style.overflowY = 'auto';
     holder.style.overflowX = 'hidden';
-
     const bs = state.budgets || [];
     if (!bs.length) { holder.innerHTML = `<div class="muted">No budgets set</div>`; return; }
     holder.innerHTML = bs.map((b, idx) => {
@@ -199,21 +208,12 @@
       if (newAmount === null) return;
       const n = Number(newAmount || 0);
       if (isNaN(n) || n < 0) { toast('Invalid amount'); return; }
-      state.budgets[idx].amount = n;
-      saveState();
-      scheduleSync();
-      renderBudgetsList();
-      toast('Budget updated');
+      state.budgets[idx].amount = n; saveState(); scheduleSync(); renderBudgetsList(); toast('Budget updated');
     }));
     holder.querySelectorAll('button.delete-budget').forEach(btn => btn.addEventListener('click', () => {
-      const idx = +btn.dataset.idx;
-      const b = state.budgets[idx];
+      const idx = +btn.dataset.idx; const b = state.budgets[idx];
       if (!confirm(`Delete budget for ${b.category}?`)) return;
-      state.budgets.splice(idx,1);
-      saveState();
-      scheduleSync();
-      renderBudgetsList();
-      toast('Budget deleted');
+      state.budgets.splice(idx,1); saveState(); scheduleSync(); renderBudgetsList(); toast('Budget deleted');
     }));
   }
 
@@ -222,31 +222,18 @@
     const amount = Number(($('newBudgetAmount')?.value || 0));
     if (!category) { toast('Choose a category'); return; }
     if (!amount || amount <= 0) { toast('Enter budget amount greater than 0'); return; }
-    // replace existing budget for same category
     state.budgets = state.budgets || [];
     const existing = state.budgets.find(b => b.category === category);
-    if (existing) {
-      existing.amount = amount;
-    } else {
-      state.budgets.push({ id: uid('bud'), category, amount, createdAt: new Date().toISOString() });
-    }
-    saveState();
-    scheduleSync();
-    $('newBudgetAmount').value = '';
-    renderBudgetsList();
-    toast('Budget saved');
+    if (existing) existing.amount = amount; else state.budgets.push({ id: uid('bud'), category, amount, createdAt: new Date().toISOString() });
+    saveState(); scheduleSync(); $('newBudgetAmount').value = ''; renderBudgetsList(); toast('Budget saved');
   }
 
   function clearBudgets() {
     if (!confirm('Clear all budgets?')) return;
-    state.budgets = [];
-    saveState();
-    scheduleSync();
-    renderBudgetsList();
-    toast('All budgets cleared');
+    state.budgets = []; saveState(); scheduleSync(); renderBudgetsList(); toast('All budgets cleared');
   }
 
-  // --- existing app logic (transactions, loans, sync) adapted to use saveState() and new category/budget flows ---
+  // ---------------- core logic (loans, totals, repayments) ----------------
   function totals(xs) {
     return xs.reduce((r,t) => {
       const n = Number(t.amount) || 0;
@@ -306,10 +293,7 @@
         changed = true;
       }
     });
-    if (changed) {
-      saveState();
-      scheduleSync();
-    }
+    if (changed) { saveState(); scheduleSync(); }
   }
 
   function applyRepayments() {
@@ -329,25 +313,18 @@
         }
       }
     });
-    if (changed) {
-      saveState();
-      scheduleSync();
-    }
+    if (changed) { saveState(); scheduleSync(); }
   }
 
   function renderLoanSummary() {
-    repairLoanRecords();
-    applyRepayments();
-    const host = $('loanBI');
-    if (!host) return;
+    repairLoanRecords(); applyRepayments();
+    const host = $('loanBI'); if (!host) return;
     const monthKey = currentMonth();
     const rows = (state.transactions || []).filter(tx => String(tx.date || '').slice(0,7) === monthKey);
     const payback = rows.filter(tx => tx.type === 'expense' && tx.loanId).reduce((s, t) => s + (Number(t.amount) || 0), 0);
     const received = rows.filter(tx => tx.type === 'income' && tx.loanId).reduce((s, t) => s + (Number(t.amount) || 0), 0);
     const outstanding = (state.loans || []).reduce((s, l) => s + (Number(l.remaining) || 0), 0);
-    const loanRows = (state.loans || []).map(loan => {
-      return `<div class="loan-bi-row"><span>${esc(loan.name||'Loan')}<small>Principal: ${money(loan.principal)}</small></span><b>${money(loan.remaining)}</b></div>`;
-    }).join('') || `<div class="empty muted">No loan records yet</div>`;
+    const loanRows = (state.loans || []).map(loan => `<div class="loan-bi-row"><span>${esc(loan.name||'Loan')}<small>Principal: ${money(loan.principal)}</small></span><b>${money(loan.remaining)}</b></div>`).join('') || `<div class="empty muted">No loan records yet</div>`;
     host.innerHTML = `
       <div class="loan-bi-grid">
         <div class="loan-bi-stat"><small>Loan received</small><strong>${money(received)}</strong></div>
@@ -358,36 +335,33 @@
     `;
   }
 
-  // --- NEW: Budget summary & Goals rendering (used in Dashboard) ---
+  // ---------------- Budget summary & Goals rendering ----------------
   function renderBudgetReportSummary() {
+    // There are two budgetReport elements in the DOM (home placeholder and dashboard).
+    // querySelector will return the first; that one is the home placeholder (in doc order),
+    // so populating it will show budgets on Home as requested.
     const host = $('budgetReport');
     if (!host) return;
     const bs = state.budgets || [];
     if (!bs.length) { host.innerHTML = `<div class="muted">No budgets set</div>`; return; }
-
     const monthKey = currentMonth();
-    // For each budget, calculate spent this month (expense transactions matching category)
     const rows = bs.map(b => {
       const spent = (state.transactions || []).filter(tx => String(tx.date || '').slice(0,7) === monthKey && tx.type === 'expense' && tx.category === b.category)
         .reduce((s,t) => s + (Number(t.amount) || 0), 0);
       const remaining = Math.max(0, (Number(b.amount) || 0) - spent);
       return { category: b.category, budget: Number(b.amount) || 0, spent, remaining };
     });
-
-    host.innerHTML = rows.map(r => {
-      return `<div class="row" style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed var(--line)">
-        <div><strong>${esc(r.category)}</strong><small class="muted">Budget</small></div>
-        <div style="text-align:right">
-          <div><small class="muted">Spent</small><div><b>${money(r.spent)}</b></div></div>
-          <div style="margin-top:4px"><small class="muted">Remaining</small><div><b>${money(r.remaining)}</b></div></div>
-        </div>
-      </div>`;
-    }).join('');
+    host.innerHTML = rows.map(r => `<div class="row" style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed var(--line)">
+      <div><strong>${esc(r.category)}</strong><small class="muted">Budget</small></div>
+      <div style="text-align:right">
+        <div><small class="muted">Spent</small><div><b>${money(r.spent)}</b></div></div>
+        <div style="margin-top:4px"><small class="muted">Remaining</small><div><b>${money(r.remaining)}</b></div></div>
+      </div>
+    </div>`).join('');
   }
 
   function renderGoalsList() {
-    const host = $('goalsList');
-    if (!host) return;
+    const host = $('goalsList'); if (!host) return;
     const gs = state.goals || [];
     if (!gs.length) { host.innerHTML = `<div class="muted">No goals yet</div>`; return; }
     host.innerHTML = gs.map(g => {
@@ -401,55 +375,27 @@
     }).join('');
   }
 
-  // --- Dashboard stats (new) ---
+  // ---------------- Dashboard stats ----------------
   function renderDashboardStats() {
     const monthKey = currentMonth();
     const rows = (state.transactions || []).filter(tx => String(tx.date || '').slice(0,7) === monthKey);
-    // cashflow = net (income - expense - loan - credit) for current month
     const t = totals(rows);
     const cashflow = (t.income || 0) - (t.expense || 0) - (t.loan || 0) - (t.credit || 0);
-    const cfEl = $('cashflow');
-    if (cfEl) cfEl.textContent = money(cashflow);
-
-    // top spending (by category) for current month
+    const cfEl = $('cashflow'); if (cfEl) cfEl.textContent = money(cashflow);
     const expenseRows = rows.filter(tx => tx.type === 'expense');
-    const spendByCat = {};
-    expenseRows.forEach(tx => {
-      const cat = tx.category || tx.note || 'Other';
-      spendByCat[cat] = (spendByCat[cat] || 0) + (Number(tx.amount) || 0);
-    });
-    let topCat = '—', topAmt = 0;
-    for (const k in spendByCat) {
-      if (spendByCat[k] > topAmt) { topAmt = spendByCat[k]; topCat = k; }
-    }
-    const topSpendEl = $('topSpend');
-    if (topSpendEl) topSpendEl.textContent = topCat || '—';
-    const topAmtEl = $('topAmt');
-    if (topAmtEl) topAmtEl.textContent = money(topAmt);
-
-    // largest activity: single txn with largest absolute amount in month
-    let largestLabel = '—', largestAmt = 0;
-    if (rows.length) {
-      const sorted = rows.slice().sort((a,b) => Math.abs(Number(b.amount)||0) - Math.abs(Number(a.amount)||0));
-      const l = sorted[0];
-      largestLabel = l.category || l.note || l.type || '—';
-      largestAmt = Number(l.amount) || 0;
-    }
-    const largestEl = $('largest');
-    if (largestEl) largestEl.textContent = largestLabel;
-    const largestAmtEl = $('largestAmt');
-    if (largestAmtEl) largestAmtEl.textContent = money(largestAmt);
-
-    // entries count
-    const rhythmEl = $('rhythm');
-    if (rhythmEl) rhythmEl.textContent = String(rows.length || 0);
+    const spendByCat = {}; expenseRows.forEach(tx => { const cat = tx.category || tx.note || 'Other'; spendByCat[cat] = (spendByCat[cat] || 0) + (Number(tx.amount) || 0); });
+    let topCat = '—', topAmt = 0; for (const k in spendByCat) if (spendByCat[k] > topAmt) { topAmt = spendByCat[k]; topCat = k; }
+    const topSpendEl = $('topSpend'); if (topSpendEl) topSpendEl.textContent = topCat || '—'; const topAmtEl = $('topAmt'); if (topAmtEl) topAmtEl.textContent = money(topAmt);
+    let largestLabel = '—', largestAmt = 0; if (rows.length) { const sorted = rows.slice().sort((a,b) => Math.abs(Number(b.amount)||0) - Math.abs(Number(a.amount)||0)); const l = sorted[0]; largestLabel = l.category || l.note || l.type || '—'; largestAmt = Number(l.amount) || 0; }
+    const largestEl = $('largest'); if (largestEl) largestEl.textContent = largestLabel; const largestAmtEl = $('largestAmt'); if (largestAmtEl) largestAmtEl.textContent = money(largestAmt);
+    const rhythmEl = $('rhythm'); if (rhythmEl) rhythmEl.textContent = String(rows.length || 0);
   }
 
-  // --- Trend chart rendering (vanilla canvas) ---
+  // ---------------- Trend chart ----------------
   function getLastNMonthKeys(n = 12, endISO = today) {
     const [eyear, emonth] = (endISO || today).slice(0,7).split('-').map(Number);
     const months = [];
-    let y = eyear, m = emonth - 1; // JS month 0-based
+    let y = eyear, m = emonth - 1;
     for (let i = n - 1; i >= 0; i--) {
       const d = new Date(Date.UTC(y, m - i, 1));
       const ky = d.getUTCFullYear();
@@ -460,7 +406,6 @@
   }
 
   function computeMonthlyNetFlow(monthKeys) {
-    // net flow = income - expense - loan - credit (consistent with header computations)
     const map = {};
     (state.transactions || []).forEach(tx => {
       const key = String(tx.date || '').slice(0,7);
@@ -476,150 +421,76 @@
   }
 
   function renderTrendChart() {
-    const canvas = $('chart');
-    if (!canvas) return;
-    // responsive sizing
+    const canvas = $('chart'); if (!canvas) return;
     const parentWidth = canvas.parentElement ? canvas.parentElement.clientWidth : canvas.clientWidth || 600;
     const height = 220;
     canvas.width = Math.max(300, parentWidth * devicePixelRatio);
     canvas.height = Math.max(120, height * devicePixelRatio);
     canvas.style.width = parentWidth + 'px';
     canvas.style.height = height + 'px';
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.clearRect(0,0,canvas.width, canvas.height);
-    ctx.save();
-    ctx.scale(devicePixelRatio, devicePixelRatio);
-
-    // Data
-    const months = getLastNMonthKeys(12);
-    const values = computeMonthlyNetFlow(months).map(v => Math.round(v));
-    // axes padding
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    ctx.clearRect(0,0,canvas.width, canvas.height); ctx.save(); ctx.scale(devicePixelRatio, devicePixelRatio);
+    const months = getLastNMonthKeys(12); const values = computeMonthlyNetFlow(months).map(v => Math.round(v));
     const padLeft = 40, padRight = 12, padTop = 12, padBottom = 30;
-    const w = (canvas.width / devicePixelRatio) - padLeft - padRight;
-    const h = (canvas.height / devicePixelRatio) - padTop - padBottom;
-
-    // find bounds
-    let min = Math.min(...values);
-    let max = Math.max(...values);
-    if (min === Infinity || max === -Infinity) { min = 0; max = 0; }
-    // expand a bit for aesthetics
-    const range = Math.max(1, max - min);
-    max = Math.ceil(max + range * 0.1);
-    min = Math.floor(min - range * 0.1);
-    // grid lines (4)
-    ctx.strokeStyle = 'rgba(0,0,0,0.06)';
-    ctx.lineWidth = 1;
-    ctx.font = '12px system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial';
-    ctx.fillStyle = 'var(--muted, #999)';
-
+    const w = (canvas.width / devicePixelRatio) - padLeft - padRight; const h = (canvas.height / devicePixelRatio) - padTop - padBottom;
+    let min = Math.min(...values), max = Math.max(...values); if (min === Infinity || max === -Infinity) { min = 0; max = 0; }
+    const range = Math.max(1, max - min); max = Math.ceil(max + range * 0.1); min = Math.floor(min - range * 0.1);
+    ctx.strokeStyle = 'rgba(0,0,0,0.06)'; ctx.lineWidth = 1;
+    ctx.font = '12px system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial'; ctx.fillStyle = 'var(--muted, #999)';
     for (let i = 0; i <= 4; i++) {
       const y = padTop + (h * i / 4);
-      ctx.beginPath();
-      ctx.moveTo(padLeft, y);
-      ctx.lineTo(padLeft + w, y);
-      ctx.stroke();
-      // label
+      ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(padLeft + w, y); ctx.stroke();
       const val = Math.round(max - (i * (max - min) / 4));
       ctx.fillText(`${val.toLocaleString()}`, 6, y + 4);
     }
-
-    // X labels
     ctx.textAlign = 'center';
     months.forEach((m, i) => {
       const x = padLeft + (w * (i / (months.length - 1 || 1)));
-      const lab = m.slice(5); // MM
-      ctx.fillText(lab, x, padTop + h + 18);
+      const lab = m.slice(5); ctx.fillText(lab, x, padTop + h + 18);
     });
-
-    // line path
     ctx.beginPath();
     const points = values.map((v, i) => {
       const x = padLeft + (w * (i / (values.length - 1 || 1)));
       const y = padTop + ( (max - v) / (max - min || 1) * h );
       return { x, y };
     });
-
-    // draw fill (subtle)
     if (points.length) {
-      ctx.moveTo(points[0].x, points[0].y);
-      for (let p of points) ctx.lineTo(p.x, p.y);
-      ctx.lineTo(padLeft + w, padTop + h);
-      ctx.lineTo(padLeft, padTop + h);
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(62,149,205,0.08)';
-      ctx.fill();
+      ctx.moveTo(points[0].x, points[0].y); for (let p of points) ctx.lineTo(p.x, p.y);
+      ctx.lineTo(padLeft + w, padTop + h); ctx.lineTo(padLeft, padTop + h); ctx.closePath(); ctx.fillStyle = 'rgba(62,149,205,0.08)'; ctx.fill();
     }
-
-    // draw line
-    ctx.beginPath();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = 'rgba(62,149,205,1)';
-    if (points.length) {
-      ctx.moveTo(points[0].x, points[0].y);
-      for (let i = 1; i < points.length; i++) {
-        ctx.lineTo(points[i].x, points[i].y);
-      }
-      ctx.stroke();
-    }
-
-    // draw points
-    points.forEach((p, i) => {
-      ctx.beginPath();
-      ctx.fillStyle = 'white';
-      ctx.strokeStyle = 'rgba(62,149,205,1)';
-      ctx.lineWidth = 1.5;
-      ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    });
-
-    // draw latest value box on top-right
+    ctx.beginPath(); ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(62,149,205,1)';
+    if (points.length) { ctx.moveTo(points[0].x, points[0].y); for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y); ctx.stroke(); }
+    points.forEach((p, i) => { ctx.beginPath(); ctx.fillStyle = 'white'; ctx.strokeStyle = 'rgba(62,149,205,1)'; ctx.lineWidth = 1.5; ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); });
     if (values.length) {
       const latest = values[values.length - 1];
       const txt = `${Math.round(latest).toLocaleString()} MMK`;
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      const tw = ctx.measureText(txt).width + 14;
-      const bx = padLeft + w - tw;
-      const by = padTop + 6;
-      ctx.fillRect(bx, by, tw, 22);
-      ctx.fillStyle = 'white';
-      ctx.fillText(txt, bx + tw / 2, by + 15);
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'; const tw = ctx.measureText(txt).width + 14; const bx = padLeft + w - tw; const by = padTop + 6;
+      ctx.fillRect(bx, by, tw, 22); ctx.fillStyle = 'white'; ctx.fillText(txt, bx + tw / 2, by + 15);
     }
-
     ctx.restore();
   }
 
-  // --- Transactions rendering ---
-  function renderHeaderStats() {
-    const xs = (state.transactions || []).filter(t => String(t.date || '').slice(0,7) === currentMonth());
-    const t = totals(xs);
-    const remainingMoney = (t.income || 0) - (t.expense || 0) - (t.loan || 0) - (t.credit || 0);
-    const now = new Date();
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
-    const daysLeft = Math.max(1, daysInMonth - now.getDate() + 1);
-    const daily = Math.max(0, Math.floor(remainingMoney / daysLeft));
-    const map = [['income', t.income], ['expense', t.expense], ['loan', t.loan], ['daily', daily], ['remaining', remainingMoney]];
-    map.forEach(([id,val]) => {
-      const el = $(id);
-      if (!el) return;
-      const strong = el.querySelector('strong');
-      if (strong) strong.textContent = money(val); else el.textContent = money(val);
-    });
+  // ---------------- Transactions rendering with pagination / lazy loading ----------------
+  const DEFAULT_PAGE_SIZE = 50;
+  let txPageSize = DEFAULT_PAGE_SIZE;
+  let txCurrentPage = 1;
+
+  function getTxTotalPages() {
+    const total = (state.transactions || []).length;
+    return Math.max(1, Math.ceil(total / txPageSize));
   }
 
   function renderTransactions() {
-    const xs = (state.transactions || []).slice().reverse();
-    const recentDiv = $('recent'); const recentTbody = $('recentRows'); const txTbody = $('txRows');
-    if (!xs.length) {
-      if (recentDiv) recentDiv.innerHTML = `<div class="muted">No transactions</div>`;
-      if (recentTbody) recentTbody.innerHTML = `<tr><td colspan="4" class="muted">No transactions</td></tr>`;
-      if (txTbody) txTbody.innerHTML = `<tr><td colspan="4" class="muted">No transactions</td></tr>`;
-      return;
-    }
+    // recent list (small)
+    const recentDiv = $('recent');
+    const recentTbody = $('recentRows');
+    const txTbody = $('txRows');
+    const all = (state.transactions || []).slice().reverse(); // newest first
 
+    // recent (top 5)
     if (recentDiv) {
-      recentDiv.innerHTML = xs.slice(0,5).map(tx => {
+      if (!all.length) recentDiv.innerHTML = `<div class="muted">No transactions</div>`;
+      else recentDiv.innerHTML = all.slice(0,5).map(tx => {
         const right = tx.type === 'income' ? `<b style="color:green">${money(tx.amount)}</b>` : `<b>${money(tx.amount)}</b>`;
         return `<div class="row" style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px;border-radius:10px;border:1px solid var(--line);background:var(--card);margin-bottom:6px">
                   <div>
@@ -632,7 +503,8 @@
     }
 
     if (recentTbody) {
-      recentTbody.innerHTML = xs.slice(0,8).map(tx => {
+      if (!all.length) recentTbody.innerHTML = `<tr><td colspan="4" class="muted">No transactions</td></tr>`;
+      else recentTbody.innerHTML = all.slice(0,8).map(tx => {
         const right = tx.type === 'income' ? `<b style="color:green">${money(tx.amount)}</b>` : `<b>${money(tx.amount)}</b>`;
         return `<tr>
           <td>${esc(tx.date || '')}</td>
@@ -643,10 +515,17 @@
       }).join('');
     }
 
-    if (txTbody) {
-      txTbody.innerHTML = xs.map(tx => {
+    // paginated history table
+    if (!txTbody) return;
+    const totalPages = getTxTotalPages();
+    txCurrentPage = Math.max(1, Math.min(txCurrentPage, totalPages));
+    const start = (txCurrentPage - 1) * txPageSize;
+    const pageItems = all.slice(start, start + txPageSize);
+    if (!pageItems.length) {
+      txTbody.innerHTML = `<tr><td colspan="4" class="muted">No transactions</td></tr>`;
+    } else {
+      txTbody.innerHTML = pageItems.map(tx => {
         const right = tx.type === 'income' ? `<b style="color:green">${money(tx.amount)}</b>` : `<b>${money(tx.amount)}</b>`;
-        // ADD Delete button in Transactions (History) table only
         return `<tr>
           <td>${esc(tx.date || '')}</td>
           <td><div style="font-weight:700">${esc(tx.category || tx.note || tx.type)}</div><small class="muted">${esc(tx.note || '')} ${tx.loanId ? ' • ' + esc(tx.loanId) : ''}</small></td>
@@ -655,59 +534,164 @@
         </tr>`;
       }).join('');
     }
+
+    ensureTxPaginationControls();
   }
 
-  // Replace existing api() with a hardened, form-encoded POST to avoid CORS preflight and produce clearer errors.
+  function ensureTxPaginationControls() {
+    const txPanel = $('txRows') ? $('txRows').closest('.panel') || $('txRows').parentElement : null;
+    if (!txPanel) return;
+    let container = txPanel.querySelector('#txPagination');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'txPagination';
+      container.style.display = 'flex';
+      container.style.justifyContent = 'center';
+      container.style.gap = '8px';
+      container.style.alignItems = 'center';
+      container.style.marginTop = '8px';
+      txPanel.appendChild(container);
+    }
+    const totalPages = getTxTotalPages();
+    container.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px">
+        <button id="txPrev" class="small"${txCurrentPage<=1?' disabled':''}>Prev</button>
+        <div id="txPageInfo" class="muted">Page ${txCurrentPage} / ${totalPages}</div>
+        <button id="txNext" class="small"${txCurrentPage>=totalPages?' disabled':''}>Next</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-left:12px">
+        <label class="small muted" for="txPageSize">Rows</label>
+        <select id="txPageSize" style="min-width:64px">
+          <option value="20"${txPageSize===20?' selected':''}>20</option>
+          <option value="50"${txPageSize===50?' selected':''}>50</option>
+          <option value="100"${txPageSize===100?' selected':''}>100</option>
+        </select>
+      </div>
+    `;
+    container.querySelector('#txPrev')?.addEventListener('click', () => {
+      if (txCurrentPage > 1) { txCurrentPage--; renderTransactions(); window.scrollTo(0,0); }
+    });
+    container.querySelector('#txNext')?.addEventListener('click', () => {
+      if (txCurrentPage < totalPages) { txCurrentPage++; renderTransactions(); window.scrollTo(0,0); }
+    });
+    container.querySelector('#txPageSize')?.addEventListener('change', (e) => {
+      const v = Number(e.target.value) || DEFAULT_PAGE_SIZE;
+      txPageSize = v; txCurrentPage = 1; saveState(); renderTransactions();
+    });
+  }
+
+  // ---------------- API sync with fallback (POST then JSONP chunked) ----------------
+  function normalizeScriptUrl(u) {
+    if (!u) return u;
+    try {
+      const url = new URL(u.trim());
+      // ensure /exec endpoint
+      if (url.pathname.endsWith('/dev')) url.pathname = url.pathname.replace(/\/dev$/, '/exec');
+      if (!url.pathname.includes('/exec')) url.pathname = (url.pathname.replace(/\/+$/, '') + '/exec');
+      return url.toString();
+    } catch (e) {
+      let s = u.trim();
+      if (s.indexOf('/dev') !== -1) s = s.replace('/dev', '/exec');
+      if (s.indexOf('/exec') === -1) { if (s.endsWith('/')) s = s + 'exec'; else s = s + '/exec'; }
+      return s;
+    }
+  }
+
+  function jsonpCall(url, paramsObj = {}, timeout = 15000) {
+    return new Promise((resolve, reject) => {
+      try {
+        const cbName = '__mf_jsonp_cb_' + Date.now() + '_' + Math.floor(Math.random()*10000);
+        let script = null, to = null;
+        const cleanup = () => {
+          try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+          if (to) clearTimeout(to);
+        };
+        window[cbName] = (res) => { cleanup(); resolve(res); };
+        const params = new URLSearchParams(paramsObj);
+        params.set('callback', cbName);
+        const sep = url.includes('?') ? '&' : '?';
+        script = document.createElement('script');
+        script.src = url + sep + params.toString();
+        script.onerror = () => { cleanup(); reject(new Error('JSONP load error')); };
+        to = setTimeout(() => { cleanup(); reject(new Error('JSONP timeout')); }, timeout);
+        document.head.appendChild(script);
+      } catch (e) { reject(e); }
+    });
+  }
+
+  function splitIntoChunks(str, chunkSize) {
+    const out = [];
+    for (let i = 0; i < str.length; i += chunkSize) out.push(str.slice(i, i + chunkSize));
+    return out;
+  }
+
   async function api(action, payload = {}) {
     if (!state.settings || !state.settings.syncUrl) throw new Error('Add the Apps Script URL first.');
+    const rawUrl = state.settings.syncUrl;
+    const url = normalizeScriptUrl(rawUrl);
 
-    // Prepare form-encoded body
-    const params = new URLSearchParams();
-    params.append('action', action);
-    params.append('payload', JSON.stringify(payload));
-
-    let r;
+    // Try POST first
     try {
-      r = await fetch(state.settings.syncUrl, {
+      const params = new URLSearchParams();
+      params.append('action', action);
+      params.append('payload', JSON.stringify(payload));
+      const r = await fetch(url, {
         method: 'POST',
         mode: 'cors',
         cache: 'no-store',
         redirect: 'follow',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-          'Accept': 'application/json, text/plain, */*'
-        },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8', 'Accept': 'application/json, text/plain, */*' },
         body: params.toString()
       });
-    } catch (fetchErr) {
-      console.error('Fetch error in api():', fetchErr);
-      throw new Error('Network error when contacting sync endpoint: ' + String(fetchErr));
-    }
-
-    // Try to parse JSON, fallback to text for better diagnostics
-    const text = await r.text().catch(() => null);
-    let parsed = null;
-    if (text) {
-      try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
-    }
-
-    if (!r.ok) {
-      const bodyMsg = parsed ? JSON.stringify(parsed) : text || ('status ' + r.status);
-      throw new Error('Sync failed: ' + bodyMsg);
-    }
-
-    // If parsed JSON available return it, otherwise attempt to return text wrapped
-    if (parsed) return parsed;
-    try {
+      const text = await r.text().catch(()=>null);
+      let parsed = null; if (text) { try { parsed = JSON.parse(text); } catch(e) { parsed = null; } }
+      if (!r.ok) { const bodyMsg = parsed ? JSON.stringify(parsed) : text || ('status ' + r.status); throw new Error('Sync failed: ' + bodyMsg); }
+      if (parsed) return parsed;
       return { ok: true, data: text ? safeParse(text, {}) : {} };
-    } catch (e) {
-      return { ok: true, data: {} };
+    } catch (postErr) {
+      // fallback for read actions
+      if (action === 'getAll' || action === 'ping') {
+        try {
+          const resp = await jsonpCall(url, { action });
+          return resp;
+        } catch (je) {
+          throw new Error('Network error when contacting sync endpoint: ' + (postErr && postErr.message ? postErr.message : String(postErr)));
+        }
+      }
+
+      // fallback for replaceAll: chunked JSONP upload
+      if (action === 'replaceAll') {
+        try {
+          const payloadStr = JSON.stringify(payload || {});
+          const CHUNK_SIZE = 1500; // conservative
+          const chunks = splitIntoChunks(payloadStr, CHUNK_SIZE);
+          const uploadId = 'u_' + Date.now().toString(36) + '_' + Math.floor(Math.random()*10000);
+          for (let i = 0; i < chunks.length; i++) {
+            // appendChunk via JSONP: action=appendChunk, uploadId, index, chunk
+            await jsonpCall(url, { action: 'appendChunk', uploadId, index: i, chunk: chunks[i] });
+          }
+          // finishUpload action -> server assembles & writes and returns data object
+          const finish = await jsonpCall(url, { action: 'finishUpload', uploadId, total: chunks.length });
+          return finish;
+        } catch (je) {
+          let hint = '';
+          if (location && location.protocol === 'https:' && rawUrl && rawUrl.startsWith('http:')) hint = 'Possible mixed-content (HTTPS page calling HTTP URL). Use HTTPS for Apps Script URL.';
+          throw new Error('Network error when contacting sync endpoint: ' + (postErr && postErr.message ? postErr.message : String(postErr)) + (hint ? ' ' + hint : ''));
+        }
+      }
+
+      throw new Error('Network error when contacting sync endpoint: ' + (postErr && postErr.message ? postErr.message : String(postErr)));
     }
   }
 
-  // queueSync sends state to server. scheduleSync debounces calls.
+  // ---------------- queueSync / schedule ----------------
+  let _syncTimer = null;
   async function queueSync() {
-    if (!state.settings || !state.settings.syncUrl) return;
+    if (!state.settings || !state.settings.syncUrl) {
+      // nothing to do
+      return;
+    }
     try {
       const payload = {
         transactions: state.transactions || [],
@@ -718,40 +702,29 @@
       };
       const res = await api('replaceAll', payload);
       if (res && res.data) {
-        // update client state using authoritative server data (if provided)
         state.transactions = res.data.transactions || state.transactions || [];
         state.loans = res.data.loans || state.loans || [];
         state.categories = res.data.categories || state.categories || [];
         state.budgets = res.data.budgets || state.budgets || [];
         state.goals = res.data.goals || state.goals || [];
-        saveState();
-        renderAll();
+        saveState(); renderAll();
       }
-      // success toast is handled by caller or testSync; avoid verbose toasts here
       return res;
     } catch (e) {
       console.warn('sync failed', e);
-      // bubble error up so callers can show toasts if needed
       throw e;
     }
   }
 
-  // Debounced sync scheduler to avoid many rapid requests
-  let _syncTimer = null;
   function scheduleSync(delay = 900) {
     if (_syncTimer) clearTimeout(_syncTimer);
     _syncTimer = setTimeout(async () => {
       _syncTimer = null;
-      try {
-        await queueSync();
-      } catch (e) {
-        // show a lightweight message but don't block app
-        console.warn('Scheduled sync failed:', e);
-      }
+      try { await queueSync(); } catch (e) { console.warn('Scheduled sync failed:', e); }
     }, delay);
   }
 
-  // --- form submit and tab logic (keeps existing behavior) ---
+  // ---------------- form submit & tabs ----------------
   async function saveTransactionForm(e) {
     e.preventDefault();
     const amountInput = $('amount'), dateInput = $('date'), noteInput = $('note'), categorySelect = $('category');
@@ -768,7 +741,7 @@
       tx = { id: uid('tx'), type: 'income', amount, category: category || 'Loan', note, date, loanId, loanType: 'loan', createdAt: new Date().toISOString() };
       state.transactions.push(tx);
       state.loans = state.loans || [];
-      state.loans.push({ id: loanId, name: note || 'Loan', principal: Number(tx.amount) || Number(amount), remaining: Number(amount), date, note, createdAt: tx.createdAt });
+      state.loans.push({ id: loanId, name: note || 'Loan', principal: Number(amount), remaining: Number(amount), date, note, createdAt: tx.createdAt });
     } else if (type === 'credit') {
       const loanSelect = $('loanRepaySelect');
       const loanId = loanSelect && loanSelect.value;
@@ -781,9 +754,7 @@
       tx = { id: uid('tx'), type: type === 'income' ? 'income' : 'expense', amount, category, note, date, createdAt: new Date().toISOString() };
       state.transactions.push(tx);
     }
-    saveState();
-    updateLoanRepaymentField(); renderAll(); toast('Saved');
-    // schedule sync (debounced)
+    saveState(); txCurrentPage = 1; updateLoanRepaymentField(); renderAll(); toast('Saved');
     try { scheduleSync(); } catch (_) {}
     showPage('home'); const form = $('form'); if (form) form.reset(); if ($('date')) $('date').value = today;
   }
@@ -806,6 +777,7 @@
     if (state.currentType) document.querySelectorAll('.tabs [data-type]').forEach(b => b.classList.toggle('active', b.dataset.type === state.currentType));
   }
 
+  // ---------------- navigation & global clicks ----------------
   function updateNavDisplay(activePage) {
     const hideOnPages = ['add'];
     const bottomNav = q('nav.bottom-nav');
@@ -839,13 +811,13 @@
       const id = rem.dataset.remove;
       if (id) {
         state.transactions = (state.transactions || []).filter(t => String(t.id) !== String(id));
-        saveState(); renderAll();
-        scheduleSync();
+        saveState(); renderAll(); scheduleSync();
       }
       return;
     }
   }
 
+  // ---------------- theme ----------------
   function applyTheme() {
     document.body.classList.toggle('dark', state.settings?.theme === 'dark');
     document.querySelectorAll('.theme-toggle').forEach(btn => btn.textContent = state.settings?.theme === 'dark' ? '☾' : '☼');
@@ -853,11 +825,29 @@
     saveState();
   }
 
+  // ---------------- UI composition & initial adjustments requested ----------------
+  function hideHomeActivityPanel() {
+    // Hide the transactionsPanel inside Home (the "Activity" panel). The Transactions page remains intact.
+    const txPanel = $('transactionsPanel');
+    if (txPanel) txPanel.style.display = 'none';
+  }
+
+  function showHomeBudgetPlaceholder() {
+    // Home had an existing budget placeholder (#budgetPanel-home-placeholder). Show it so budget is visible on home.
+    const ph = $('budgetPanel-home-placeholder');
+    if (ph) ph.style.display = '';
+  }
+
+  // ---------------- overall renderAll ----------------
   function renderAll() {
+    // Ensure home UI modifications
+    hideHomeActivityPanel();
+    showHomeBudgetPlaceholder();
+
     greeting(); populateCategories(); renderHeaderStats(); renderTransactions(); renderLoanSummary(); updateLoanRepaymentField();
     renderCategoriesList(); renderBudgetsList(); fillCategorySelects();
     renderBudgetReportSummary(); renderGoalsList(); renderTrendChart();
-    renderDashboardStats(); // <-- update dashboard metrics correctly
+    renderDashboardStats();
     if ($('month')) $('month').value = currentMonth();
     if ($('txCount')) $('txCount').textContent = `Activity (${(state.transactions||[]).length})`;
     if ($('txCountList')) $('txCountList').textContent = `Transactions (${(state.transactions||[]).length})`;
@@ -868,6 +858,7 @@
     if ($('greet')) $('greet').textContent = `GOOD ${part.toUpperCase()}`;
   }
 
+  // ---------------- wiring events ----------------
   function wireEvents() {
     document.addEventListener('click', handleGlobalClicks);
     document.getElementById('form')?.addEventListener('submit', saveTransactionForm);
@@ -884,33 +875,25 @@
 
     // sync events
     $('saveSyncUrl')?.addEventListener('click', () => {
-      const url = ($('syncUrlInput')?.value || '').trim(); state.settings = state.settings || {}; state.settings.syncUrl = url; saveState(); toast(url ? 'Sync URL saved' : 'Sync URL cleared');
+      const url = ($('syncUrlInput')?.value || '').trim();
+      state.settings = state.settings || {}; state.settings.syncUrl = url ? normalizeScriptUrl(url) : '';
+      saveState(); toast(url ? 'Sync URL saved' : 'Sync URL cleared');
     });
+
     $('testSync')?.addEventListener('click', async () => {
       const url = ($('syncUrlInput')?.value || '').trim(); if (!url) { toast('Enter Apps Script URL first'); return; }
-      state.settings = state.settings || {}; state.settings.syncUrl = url; saveState();
+      state.settings = state.settings || {}; state.settings.syncUrl = normalizeScriptUrl(url); saveState();
       try {
-        // quick ping to check endpoint responsiveness
         const ping = await api('ping', {});
         if (ping && (ping.ok || ping.message)) {
-          // if ping succeeded, run a push to confirm write access
-          try {
-            await queueSync();
-            toast('Test sync done');
-          } catch (e) {
-            toast('Test sync (push) failed: ' + (e && e.message ? e.message : String(e)));
-          }
-        } else {
-          toast('Ping did not return expected response');
-        }
-      } catch (e) {
-        console.warn('ping failed', e);
-        toast('Ping failed: ' + (e && e.message ? e.message : String(e)));
-      }
+          try { await queueSync(); toast('Test sync done'); } catch (e) { toast('Test sync (push) failed: ' + (e && e.message ? e.message : String(e))); }
+        } else toast('Ping did not return expected response');
+      } catch (e) { console.warn('ping failed', e); toast('Ping failed: ' + (e && e.message ? e.message : String(e))); }
     });
+
     $('pullFromSheets')?.addEventListener('click', async () => {
       const url = ($('syncUrlInput')?.value || '').trim(); if (!url) { toast('Enter Apps Script URL first'); return; }
-      state.settings = state.settings || {}; state.settings.syncUrl = url; saveState();
+      state.settings = state.settings || {}; state.settings.syncUrl = normalizeScriptUrl(url); saveState();
       try {
         const res = await api('getAll', {});
         if (res && res.data) {
@@ -920,18 +903,27 @@
           state.budgets = res.data.budgets || state.budgets || [];
           state.goals = res.data.goals || state.goals || [];
           saveState(); renderAll(); toast('Pulled from sheet');
-        } else {
-          toast('No data from sheet');
-        }
+        } else toast('No data from sheet');
       } catch (e) { console.warn('pull failed', e); toast('Pull failed: ' + (e && e.message ? e.message : String(e))); }
     });
 
     $('clear')?.addEventListener('click', () => { if (!confirm('Clear all transactions?')) return; state.transactions = []; state.loans = []; saveState(); scheduleSync(); renderAll(); toast('Cleared'); });
     $('cancelAdd')?.addEventListener('click', () => showPage('home'));
 
+    // Month selector (home panel) - when changed update report month and trigger carry over
+    const monthInput = $('month');
+    if (monthInput) {
+      monthInput.value = currentMonth();
+      monthInput.addEventListener('change', (e) => {
+        const v = e.target.value;
+        if (!v) return;
+        state.reportMonth = v; saveState(); carryOverIfMissingForMonth(v); renderAll();
+      });
+    }
+
+    // handle window resize for chart
     window.addEventListener('resize', () => {
       updateNavDisplay(document.querySelector('.page.active')?.id || 'home');
-      // re-render chart responsively
       renderTrendChart();
     });
   }
@@ -943,10 +935,15 @@
     state.budgets = Array.isArray(state.budgets) ? state.budgets : [];
     state.loans = Array.isArray(state.loans) ? state.loans : [];
     state.goals = Array.isArray(state.goals) ? state.goals : [];
+    // initialize pagination state
+    txPageSize = Number(state.settings?.txPageSize) || DEFAULT_PAGE_SIZE;
+    txCurrentPage = 1;
     repairTransactionIds();
     applyTheme();
     wireEvents();
     wireTabs();
+    // run carry over check for stored report month
+    carryOverIfMissingForMonth(state.reportMonth);
     renderAll();
     showPage('home');
   }
@@ -958,7 +955,8 @@
     renderAll,
     applyTheme,
     updateLoanRepaymentField,
-    scheduleSync
+    scheduleSync,
+    _tx: { pageSize: () => txPageSize, currentPage: () => txCurrentPage, totalPages: () => getTxTotalPages() }
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once:true }); else init();
