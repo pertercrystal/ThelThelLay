@@ -14,16 +14,13 @@
     try { return JSON.parse(s); } catch (e) { return fallback; }
   }
 
-  function defaultCategories() {
-    // start with no default categories
-    return [];
-  }
+  function defaultCategories() { return []; }
 
   function fallback() {
     return {
       transactions: [],
       categories: defaultCategories(),
-      budgets: [], // {id, category, amount}
+      budgets: [],
       goals: [],
       loans: [],
       settings: { theme: 'light', syncUrl: '', carryOverEnabled: true, carryOverConfirm: false, txPageSize: 50 },
@@ -55,9 +52,7 @@
 
   function uid(prefix='id') { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`; }
 
-  function saveState() {
-    writeState(state);
-  }
+  function saveState() { writeState(state); }
 
   function repairTransactionIds() {
     let changed = false; (state.transactions || []).forEach(tx => {
@@ -65,23 +60,16 @@
       if (!tx.createdAt) { tx.createdAt = Date.now(); changed = true; }
       if (!tx.date) { tx.date = today; changed = true; }
     });
-    if (changed) {
-      saveState();
-      scheduleSync();
-    }
+    if (changed) { saveState(); scheduleSync(); }
   }
 
   function currentMonth() { return state.reportMonth || today.slice(0,7); }
 
-  // -------------------------
-  // Transaction pagination config
-  // -------------------------
-  const TX_PAGE_SIZE = 50; // default page size for history
+  const TX_PAGE_SIZE = 50;
   let txCurrentPage = 1;
   let txTotalPages = 1;
   let txInfiniteScrollBound = false;
 
-  // initialize page size from settings
   if (!window.__moneyflow_tx_page_size) window.__moneyflow_tx_page_size = Number(state.settings?.txPageSize) || TX_PAGE_SIZE;
 
   function getAllTxSortedDesc() {
@@ -159,7 +147,7 @@
     txInfiniteScrollBound = true;
   }
 
-  // --- Categories management ---
+  // Categories
   function renderCategoriesList() {
     const holder = $('categoriesList');
     if (!holder) return;
@@ -262,7 +250,7 @@
     }
   }
 
-  // --- Budgets management ---
+  // Budgets
   function renderBudgetsList() {
     const holder = $('budgetsList');
     if (!holder) return;
@@ -336,7 +324,7 @@
     toast('All budgets cleared');
   }
 
-  // --- app logic ---
+  // core app logic
   function totals(xs) {
     return xs.reduce((r,t) => {
       const n = Number(t.amount) || 0;
@@ -396,10 +384,7 @@
         changed = true;
       }
     });
-    if (changed) {
-      saveState();
-      scheduleSync();
-    }
+    if (changed) { saveState(); scheduleSync(); }
   }
 
   function applyRepayments() {
@@ -419,10 +404,7 @@
         }
       }
     });
-    if (changed) {
-      saveState();
-      scheduleSync();
-    }
+    if (changed) { saveState(); scheduleSync(); }
   }
 
   function prevMonthKey(monthKey) {
@@ -720,118 +702,7 @@
     ctx.restore();
   }
 
-  // --- Transactions rendering with pagination ---
-  function renderHeaderStats() {
-    const monthKey = currentMonth();
-    const xs = (state.transactions || []).filter(t => String(t.date || '').slice(0,7) === monthKey);
-    const t = totals(xs);
-    const remainingMoney = (t.income || 0) - (t.expense || 0) - (t.loan || 0) - (t.credit || 0);
-
-    const [ry, rm] = (monthKey || today.slice(0,7)).split('-').map(Number);
-    const daysInMonth = new Date(ry, rm, 0).getDate();
-    let daysLeft;
-    const realYear = new Date().getFullYear();
-    const realMonth = new Date().getMonth() + 1;
-    if (ry === realYear && rm === realMonth) {
-      const now = new Date();
-      daysLeft = Math.max(1, daysInMonth - now.getDate() + 1);
-    } else {
-      daysLeft = daysInMonth;
-    }
-
-    const daily = Math.max(0, Math.floor(remainingMoney / daysLeft));
-    const map = [['income', t.income], ['expense', t.expense], ['loan', t.loan], ['daily', daily], ['remaining', remainingMoney]];
-    map.forEach(([id,val]) => {
-      const el = $(id);
-      if (!el) return;
-      const strong = el.querySelector('strong');
-      if (strong) strong.textContent = money(val); else el.textContent = money(val);
-    });
-
-    normalizeDailyBudgets();
-
-    const dailyBudgetsHost = $('dailyBudgets');
-    if (dailyBudgetsHost) {
-      const bs = state.budgets || [];
-      if (!bs.length) {
-        dailyBudgetsHost.innerHTML = `<h4>Daily Budgets</h4><div class="muted">No budgets set</div>`;
-      } else {
-        const rows = bs.map(b => {
-          const perDay = Math.floor((Number(b.amount) || 0) / daysInMonth);
-          return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed var(--line)">
-            <div><strong>${esc(b.category)}</strong><small class="muted">Monthly ${money(b.amount)}</small></div>
-            <div style="text-align:right"><small class="muted">Per day</small><div><b>${money(perDay)}</b></div></div>
-          </div>`;
-        }).join('');
-        dailyBudgetsHost.innerHTML = `<h4>Daily Budgets</h4>` + rows;
-      }
-    }
-  }
-
-  function renderTransactions() {
-    const xs = getAllTxSortedDesc();
-    const recentDiv = $('recent');
-    const recentTbody = $('recentRows');
-    const txTbody = $('txRows');
-
-    if (recentDiv) recentDiv.style.display = 'none';
-    if (recentTbody) {
-      const recentTable = recentTbody.closest('.panel') || recentTbody.parentElement;
-      if (recentTable) recentTable.style.display = 'none';
-    }
-
-    if (txTbody) {
-      const txPanel = txTbody.closest('.panel') || txTbody.parentElement;
-      if (txPanel) {
-        txPanel.style.maxHeight = '480px';
-        txPanel.style.overflowY = 'auto';
-      }
-    }
-
-    if ($('txCount')) $('txCount').textContent = `Activity (${(state.transactions||[]).length})`;
-    if ($('txCountList')) $('txCountList').textContent = `Transactions (${(state.transactions||[]).length})`;
-
-    if (!xs.length) {
-      if (txTbody) txTbody.innerHTML = `<tr><td colspan="4" class="muted">No transactions</td></tr>`;
-      const txPanel = txTbody ? (txTbody.closest('.panel') || txTbody.parentElement) : null;
-      if (txPanel) {
-        const pag = txPanel.querySelector('#txPagination');
-        if (pag) pag.remove();
-      }
-      return;
-    }
-
-    const pageSize = Number(window.__moneyflow_tx_page_size || TX_PAGE_SIZE) || TX_PAGE_SIZE;
-    txTotalPages = Math.max(1, Math.ceil(xs.length / pageSize));
-    if (txCurrentPage > txTotalPages) txCurrentPage = txTotalPages;
-
-    const start = (txCurrentPage - 1) * pageSize;
-    const end = start + pageSize;
-    const pageItems = xs.slice(start, end);
-
-    ensureTxPaginationControls();
-    const pageInfo = document.getElementById('txPageInfo');
-    if (pageInfo) pageInfo.textContent = `Page ${txCurrentPage} / ${txTotalPages}`;
-
-    if (txTbody) {
-      txTbody.innerHTML = '';
-      const frag = document.createDocumentFragment();
-      pageItems.forEach(tx => {
-        const tr = document.createElement('tr');
-        const right = tx.type === 'income' ? `<b style="color:green">${money(tx.amount)}</b>` : `<b>${money(tx.amount)}</b>`;
-        tr.innerHTML = `<td>${esc(tx.date || '')}</td>
-          <td><div style="font-weight:700">${esc(tx.category || tx.note || tx.type)}</div><small class="muted">${esc(tx.note || '')} ${tx.loanId ? ' • ' + esc(tx.loanId) : ''}</small></td>
-          <td>${right}</td>
-          <td><button data-remove="${esc(tx.id)}" aria-label="Delete transaction" class="small delete">Delete</button></td>`;
-        frag.appendChild(tr);
-      });
-      txTbody.appendChild(frag);
-    }
-
-    attachTxInfiniteScroll();
-  }
-
-  // --- sync status helpers ---
+  // sync UI helpers
   function formatTime(ts) {
     if (!ts) return '—';
     try {
@@ -967,15 +838,13 @@
     updateSyncStatusUI();
   }
 
-  // --- URL normalization + JSONP fallback ---
+  // Network helpers (normalize URL & JSONP chunked fallback)
   function normalizeScriptUrl(u) {
     if (!u) return u;
     try {
       const url = new URL(u.trim());
       url.pathname = url.pathname.replace(/\/dev$/, '/exec');
-      if (!url.pathname.includes('/exec')) {
-        url.pathname = url.pathname.replace(/\/+$/, '') + '/exec';
-      }
+      if (!url.pathname.includes('/exec')) url.pathname = url.pathname.replace(/\/+$/, '') + '/exec';
       return url.toString();
     } catch (e) {
       let s = u.trim();
@@ -998,10 +867,7 @@
           if (script && script.parentNode) script.parentNode.removeChild(script);
           if (to) clearTimeout(to);
         };
-        window[cbName] = (res) => {
-          cleanup();
-          resolve(res);
-        };
+        window[cbName] = (res) => { cleanup(); resolve(res); };
 
         script = document.createElement('script');
         const params = new URLSearchParams();
@@ -1013,18 +879,24 @@
         script.onerror = () => { cleanup(); reject(new Error('JSONP load error')); };
         to = setTimeout(() => { cleanup(); reject(new Error('JSONP timeout')); }, timeout);
         document.head.appendChild(script);
-      } catch (e) {
-        reject(e);
-      }
+      } catch (e) { reject(e); }
     });
   }
 
+  // Chunked upload fallback - split string into chunks of N chars
+  function splitIntoChunks(str, chunkSize) {
+    const out = [];
+    for (let i = 0; i < str.length; i += chunkSize) out.push(str.slice(i, i + chunkSize));
+    return out;
+  }
+
+  // api() tries POST; on failure uses JSONP or chunked JSONP
   async function api(action, payload = {}) {
     if (!state.settings || !state.settings.syncUrl) throw new Error('Add the Apps Script URL first.');
+    const rawUrl = state.settings.syncUrl;
+    const url = normalizeScriptUrl(rawUrl);
 
-    let url = normalizeScriptUrl(state.settings.syncUrl);
-
-    // First try normal POST
+    // Try POST first
     try {
       const params = new URLSearchParams();
       params.append('action', action);
@@ -1056,23 +928,48 @@
       if (parsed) return parsed;
       return { ok: true, data: text ? safeParse(text, {}) : {} };
     } catch (postErr) {
-      // Fallback to JSONP GET if fetch is blocked by CORS / failed network / redirect issues
-      try {
-        const res = await jsonpCall(url, action, payload);
-        if (res) return res;
-      } catch (jsonpErr) {
-        let hint = '';
-        if (location && location.protocol === 'https:' && state.settings.syncUrl && state.settings.syncUrl.startsWith('http:')) {
-          hint = 'Possible mixed-content (HTTPS page calling HTTP URL). Use HTTPS for Apps Script URL.';
+      // Fallback: if action is getAll/ping we can call JSONP straightforwardly
+      if (action === 'getAll' || action === 'ping') {
+        try {
+          const resp = await jsonpCall(url, action, {});
+          return resp;
+        } catch (je) {
+          throw new Error('Network error when contacting sync endpoint: ' + (postErr && postErr.message ? postErr.message : String(postErr)));
         }
-        throw new Error('Network error when contacting sync endpoint: ' + (postErr && postErr.message ? postErr.message : String(postErr)) + (hint ? ' ' + hint : ''));
       }
-    }
 
-    // should not reach here
-    return { ok: true, data: {} };
+      // For replaceAll (big payload), use chunked JSONP fallback
+      if (action === 'replaceAll') {
+        try {
+          const payloadStr = JSON.stringify(payload || {});
+          // chunk size conservative to avoid URL length issues (1.5k chars)
+          const CHUNK_SIZE = 1500;
+          const chunks = splitIntoChunks(payloadStr, CHUNK_SIZE);
+          const uploadId = 'u_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 10000);
+          // send chunks sequentially
+          for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            // use action=appendChunk with params uploadId,index,chunk
+            await jsonpCall(url, 'appendChunk', { uploadId, index: i, chunk });
+          }
+          // finishUpload with total
+          const finishRes = await jsonpCall(url, 'finishUpload', { uploadId, total: chunks.length });
+          return finishRes;
+        } catch (je) {
+          let hint = '';
+          if (location && location.protocol === 'https:' && rawUrl && rawUrl.startsWith('http:')) {
+            hint = 'Possible mixed-content (HTTPS page calling HTTP URL). Use HTTPS for Apps Script URL.';
+          }
+          throw new Error('Network error when contacting sync endpoint: ' + (postErr && postErr.message ? postErr.message : String(postErr)) + (hint ? ' ' + hint : ''));
+        }
+      }
+
+      // otherwise rethrow
+      throw new Error('Network error when contacting sync endpoint: ' + (postErr && postErr.message ? postErr.message : String(postErr)));
+    }
   }
 
+  // queueSync (calls api('replaceAll')) and manages sync status
   async function queueSync() {
     if (!state.settings || !state.settings.syncUrl) {
       setSyncStatus({ ok: false, message: 'No sync URL', at: Date.now(), synced: false });
@@ -1141,14 +1038,11 @@
     setSyncStatus({ ok: null, message: 'Scheduled', at: Date.now(), synced: null });
     _syncTimer = setTimeout(async () => {
       _syncTimer = null;
-      try {
-        await queueSync();
-      } catch (e) {
-        console.warn('Scheduled sync failed:', e);
-      }
+      try { await queueSync(); } catch (e) { console.warn('Scheduled sync failed:', e); }
     }, delay);
   }
 
+  // UI & form handlers (same logic as before)
   async function saveTransactionForm(e) {
     e.preventDefault();
     const amountInput = $('amount'), dateInput = $('date'), noteInput = $('note'), categorySelect = $('category');
@@ -1428,53 +1322,5 @@
         }
       } catch (e) {
         console.warn('pull failed', e);
-        setSyncStatus({ ok: false, message: e && e.message ? e.message : String(e), at: Date.now(), synced: false });
-        toast('Pull failed: ' + (e && e.message ? e.message : String(e)));
-      }
-    });
-
-    $('clear')?.addEventListener('click', () => { if (!confirm('Clear all transactions?')) return; state.transactions = []; state.loans = []; saveState(); scheduleSync(); renderAll(); toast('Cleared'); });
-    $('cancelAdd')?.addEventListener('click', () => showPage('home'));
-
-    window.addEventListener('resize', () => {
-      updateNavDisplay(document.querySelector('.page.active')?.id || 'home');
-      renderTrendChart();
-    });
-  }
-
-  function init() {
-    state = readState();
-    state.transactions = Array.isArray(state.transactions) ? state.transactions : [];
-    state.categories = Array.isArray(state.categories) ? state.categories : defaultCategories();
-    state.budgets = Array.isArray(state.budgets) ? state.budgets : [];
-    state.loans = Array.isArray(state.loans) ? state.loans : [];
-    state.goals = Array.isArray(state.goals) ? state.goals : [];
-    state.settings = Object.assign({}, fallback().settings, state.settings || {});
-    window.__moneyflow_tx_page_size = Number(state.settings.txPageSize || window.__moneyflow_tx_page_size || TX_PAGE_SIZE);
-    repairTransactionIds();
-    applyTheme();
-    wireEvents();
-    wireTabs();
-    carryOverIfMissingForMonth(state.reportMonth);
-    renderAll();
-    showPage('home');
-  }
-
-  window.moneyflow = {
-    state,
-    save: () => saveState(),
-    renderAll,
-    applyTheme,
-    updateLoanRepaymentField,
-    scheduleSync,
-    _tx: {
-      pageSize: () => Number(window.__moneyflow_tx_page_size || TX_PAGE_SIZE),
-      currentPage: () => txCurrentPage,
-      totalPages: () => txTotalPages,
-      goToPage: (p) => { txCurrentPage = p; renderTransactions(); }
-    }
-  };
-
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once:true }); else init();
-
-})();
+        setSyncStatus({ ok: false, message: e &&*
+
